@@ -44,7 +44,8 @@ object AudioEngine {
         if (rms < 0.01f) return 110.0f // Too quiet, fallback
 
         var lastCorrelation = 1.0f
-        for (offset in 100 until minOf(analyzeLength / 2, 2000)) { // 220Hz to 440Hz range (typical vocal)
+        // Search between 220Hz and 440Hz range (typical vocal fundamental)
+        for (offset in 100 until minOf(analyzeLength / 2, 2000)) { 
             var correlation = 0.0f
             for (i in 0 until minOf(analyzeLength - offset, 2000)) {
                 correlation += abs(buffer[i] - buffer[i + offset])
@@ -69,14 +70,15 @@ object AudioEngine {
         
         // Detect user's singing key and map to a musical bass note
         val detectedPitch = detectDominantPitch(vocalAudio)
-        // Snap to nearest musical note (simplified)
+        
+        // Snap to nearest musical note (using Double for precise math)
         val bassFreq = when {
-            detectedPitch < 120f -> 110.0f      // A2
-            detectedPitch < 150f -> 130.81f     // C3
-            detectedPitch < 180f -> 146.83f     // D3
-            detectedPitch < 210f -> 164.81f     // E3
-            detectedPitch < 240f -> 196.00f     // G3
-            else -> 220.0f                      // A3
+            detectedPitch < 120f -> 110.00      // A2
+            detectedPitch < 150f -> 130.81      // C3
+            detectedPitch < 180f -> 146.83      // D3
+            detectedPitch < 210f -> 164.81      // E3
+            detectedPitch < 240f -> 196.00      // G3
+            else -> 220.00                      // A3
         }
 
         for (i in 0 until totalSamples) {
