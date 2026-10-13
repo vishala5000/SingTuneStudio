@@ -147,10 +147,16 @@ private fun runRecordingProcess(
             return@launch
         }
 
-        withContext(Dispatchers.Main) { onResult(true, "Processing your studio track...", null) }
+        withContext(Dispatchers.Main) { onResult(true, "Analyzing key & Processing track...", null) }
 
-        val beat = withContext(Dispatchers.Default) { AudioEngine.generateProceduralBeat(rawAudio.size / AudioEngine.SAMPLE_RATE.toFloat()) }
-        val finalMix = withContext(Dispatchers.Default) { AudioEngine.processVocalAndMix(rawAudio, beat) }
+        // UPGRADED: Now passes rawAudio so the beat generator can detect the singing key!
+        val beat = withContext(Dispatchers.Default) { 
+            AudioEngine.generateProceduralBeat(rawAudio.size / AudioEngine.SAMPLE_RATE.toFloat(), rawAudio) 
+        }
+        
+        val finalMix = withContext(Dispatchers.Default) { 
+            AudioEngine.processVocalAndMix(rawAudio, beat) 
+        }
         
         val fileName = "SingTune_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}"
         FileSaver.saveAsWav(context, finalMix, fileName)
