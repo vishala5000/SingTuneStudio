@@ -52,24 +52,26 @@ object FileSaver {
         val blockAlign = channels * bitDepth / 8
         val totalDataLen = totalAudioLen * 2 + 36
 
+        // Kotlin's .toByte() automatically truncates to the lowest 8 bits, 
+        // completely eliminating the need for ambiguous "and 0xff" bitwise operations.
         val header = byteArrayOf(
             'R'.code.toByte(), 'I'.code.toByte(), 'F'.code.toByte(), 'F'.code.toByte(),
-            (totalDataLen and 0xff).toByte(), ((totalDataLen >> 8) and 0xff).toByte(),
-            ((totalDataLen >> 16) and 0xff).toByte(), ((totalDataLen >> 24) and 0xff).toByte(),
+            totalDataLen.toByte(), (totalDataLen shr 8).toByte(),
+            (totalDataLen shr 16).toByte(), (totalDataLen shr 24).toByte(),
             'W'.code.toByte(), 'A'.code.toByte(), 'V'.code.toByte(), 'E'.code.toByte(),
             'f'.code.toByte(), 'm'.code.toByte(), 't'.code.toByte(), ' '.code.toByte(),
             16, 0, 0, 0, 
             1, 0, 
             channels.toByte(), 0,
-            (sampleRate and 0xff).toByte(), ((sampleRate >> 8) and 0xff).toByte(),
-            ((sampleRate >> 16) and 0xff).toByte(), ((sampleRate >> 24) and 0xff).toByte(),
-            (byteRate and 0xff).toByte(), ((byteRate >> 8) and 0xff).toByte(),
-            ((byteRate >> 16) and 0xff).toByte(), ((byteRate >> 24) and 0xff).toByte(),
+            sampleRate.toByte(), (sampleRate shr 8).toByte(),
+            (sampleRate shr 16).toByte(), (sampleRate shr 24).toByte(),
+            byteRate.toByte(), (byteRate shr 8).toByte(),
+            (byteRate shr 16).toByte(), (byteRate shr 24).toByte(),
             blockAlign.toByte(), 0,
             bitDepth.toByte(), 0,
             'd'.code.toByte(), 'a'.code.toByte(), 't'.code.toByte(), 'a'.code.toByte(),
-            (totalAudioLen * 2 and 0xff).toByte(), ((totalAudioLen * 2 >> 8) and 0xff).toByte(),
-            ((totalAudioLen * 2 >> 16) and 0xff).toByte(), ((totalAudioLen * 2 >> 24) and 0xff).toByte()
+            (totalAudioLen * 2).toByte(), ((totalAudioLen * 2) shr 8).toByte(),
+            ((totalAudioLen * 2) shr 16).toByte(), ((totalAudioLen * 2) shr 24).toByte()
         )
         out.write(header, 0, header.size)
     }
