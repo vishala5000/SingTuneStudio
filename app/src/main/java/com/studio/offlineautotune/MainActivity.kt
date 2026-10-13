@@ -11,8 +11,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -22,17 +20,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -54,15 +48,11 @@ fun StudioApp() {
     
     var isRecording by remember { mutableStateOf(false) }
     var isProcessing by remember { mutableStateOf(false) }
-    var statusText by remember { mutableStateOf("Tap the mic to Record your Vocals") }
+    var statusText by remember { mutableStateOf("Tap to Record") }
     var recordedAudio by remember { mutableStateOf<ShortArray?>(null) }
-    var selectedPreset by remember { mutableStateOf("Pop") }
     var detectedKey by remember { mutableStateOf("A") }
-    var detectedBPM by remember { mutableStateOf(120) }
-    var waveform by remember { mutableStateOf<List<Float>>(emptyList()) }
     
     val isRecordingAtomic = remember { AtomicBoolean(false) }
-    val audioBufferForVisualization = remember { mutableStateListOf<Short>() }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -71,35 +61,17 @@ fun StudioApp() {
             isRecording = true
             isRecordingAtomic.set(true)
             statusText = "Recording... Tap to Stop"
-            runRecordingProcess(scope, isRecordingAtomic, context, audioBufferForVisualization) { processing, status, audio, done, key, bpm ->
+            runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio, done, key ->
                 isProcessing = processing
                 statusText = status
                 if (audio != null) recordedAudio = audio
                 if (done) {
                     isRecording = false
                     detectedKey = key
-                    detectedBPM = bpm
                 }
             }
         } else {
             statusText = "Mic permission denied"
-        }
-    }
-
-    // Real-time waveform update
-    LaunchedEffect(isRecording) {
-        if (isRecording) {
-            while (isRecording) {
-                if (audioBufferForVisualization.size > 1000) {
-                    waveform = AudioEngine.getWaveformData(
-                        audioBufferForVisualization.takeLast(4410).toShortArray(),
-                        100
-                    )
-                }
-                delay(100)
-            }
-        } else {
-            waveform = emptyList()
         }
     }
 
@@ -110,16 +82,9 @@ fun StudioApp() {
             verticalArrangement = Arrangement.Center
         ) {
             Text("SingTune Studio", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.White)
-            Text("Advanced Offline Auto-Tune & Beat Maker", fontSize = 14.sp, color = Color.Gray)
-            Spacer(modifier = Modifier.height(20.dp))
+            Text("Auto-Tune • Reverb • Echo • Beat", fontSize = 14.sp, color = Color.Gray)
+            Spacer(modifier = Modifier.height(60.dp))
 
-            // Waveform Visualization
-            if (waveform.isNotEmpty()) {
-                WaveformVisualizer(waveform, modifier = Modifier.height(80.dp).fillMaxWidth())
-                Spacer(modifier = Modifier.height(20.dp))
-            }
-
-            // Record Button
             Box(
                 modifier = Modifier
                     .size(180.dp)
@@ -137,16 +102,14 @@ fun StudioApp() {
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                                 isRecording = true
                                 isRecordingAtomic.set(true)
-                                audioBufferForVisualization.clear()
                                 statusText = "Recording... Tap to Stop"
-                                runRecordingProcess(scope, isRecordingAtomic, context, audioBufferForVisualization) { processing, status, audio, done, key, bpm ->
+                                runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio, done, key ->
                                     isProcessing = processing
                                     statusText = status
                                     if (audio != null) recordedAudio = audio
                                     if (done) {
                                         isRecording = false
                                         detectedKey = key
-                                        detectedBPM = bpm
                                     }
                                 }
                             } else {
@@ -165,109 +128,36 @@ fun StudioApp() {
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(40.dp))
             Text(statusText, color = Color.White, fontSize = 16.sp)
 
-            // Key & BPM Display
             if (!isRecording && !isProcessing) {
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
+                Spacer(modifier = Modifier.height(20.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFF03DAC5).copy(alpha = 0.2f)
                 ) {
-                    InfoChip("Key: $detectedKey", Color(0xFF03DAC5))
-                    InfoChip("BPM: $detectedBPM", Color(0xFF03DAC5))
+                    Text(
+                        "Key: $detectedKey • BPM: 120",
+                        color = Color(0xFF03DAC5),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Preset Selection
-            if (!isRecording && !isProcessing) {
-                Text("Effect Preset:", color = Color.White, fontSize = 14.sp)
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly
-                ) {
-                    AudioEngine.PRESETS.keys.forEach { preset ->
-                        PresetButton(
-                            name = preset,
-                            isSelected = preset == selectedPreset,
-                            onClick = {
-                                selectedPreset = preset
-                                AudioEngine.setPreset(preset)
-                            }
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(30.dp))
 
             if (recordedAudio != null && !isRecording && !isProcessing) {
                 Button(
                     onClick = { playAudio(recordedAudio!!) }, 
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF03DAC5))
                 ) {
-                    Text("Play Final Studio Mix", color = Color.Black)
+                    Text("Play Final Mix", color = Color.Black)
                 }
             }
         }
-    }
-}
-
-@Composable
-fun WaveformVisualizer(waveform: List<Float>, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier) {
-        val path = Path()
-        val width = size.width
-        val height = size.height
-        val pointSpacing = width / waveform.size
-        
-        path.moveTo(0f, height / 2)
-        
-        waveform.forEachIndexed { index, amplitude ->
-            val x = index * pointSpacing
-            val y = height / 2 - (amplitude * height / 2)
-            path.lineTo(x, y)
-        }
-        
-        drawPath(
-            path = path,
-            color = Color(0xFF03DAC5),
-            style = Stroke(width = 2f)
-        )
-    }
-}
-
-@Composable
-fun InfoChip(text: String, color: Color) {
-    Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = color.copy(alpha = 0.2f),
-        modifier = Modifier.padding(4.dp)
-    ) {
-        Text(
-            text = text,
-            color = color,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-        )
-    }
-}
-
-@Composable
-fun PresetButton(name: String, isSelected: Boolean, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (isSelected) Color(0xFF03DAC5) else Color(0xFF2C2C2C)
-        ),
-        modifier = Modifier.padding(4.dp)
-    ) {
-        Text(name, color = if (isSelected) Color.Black else Color.White)
     }
 }
 
@@ -275,8 +165,7 @@ private fun runRecordingProcess(
     scope: kotlinx.coroutines.CoroutineScope,
     isRecordingAtomic: AtomicBoolean,
     context: android.content.Context,
-    audioBufferForVisualization: MutableList<Short>,
-    onResult: (isProcessing: Boolean, status: String, audio: ShortArray?, done: Boolean, key: String, bpm: Int) -> Unit
+    onResult: (isProcessing: Boolean, status: String, audio: ShortArray?, done: Boolean, key: String) -> Unit
 ) {
     scope.launch(Dispatchers.IO) {
         val audioRecord = AudioEngine.createAudioRecord()
@@ -286,16 +175,7 @@ private fun runRecordingProcess(
 
         while (isRecordingAtomic.get()) {
             val read = audioRecord.read(buffer, 0, buffer.size)
-            if (read > 0) {
-                for (i in 0 until read) {
-                    audioBuffer.add(buffer[i])
-                    audioBufferForVisualization.add(buffer[i])
-                }
-                // Keep visualization buffer manageable
-                if (audioBufferForVisualization.size > 44100) {
-                    audioBufferForVisualization.removeAt(0)
-                }
-            }
+            if (read > 0) for (i in 0 until read) audioBuffer.add(buffer[i])
         }
 
         audioRecord.stop()
@@ -304,17 +184,16 @@ private fun runRecordingProcess(
 
         if (rawAudio.isEmpty()) {
             withContext(Dispatchers.Main) { 
-                onResult(false, "Recording was empty. Try again.", null, true, "A", 120) 
+                onResult(false, "Recording empty. Try again.", null, true, "A") 
             }
             return@launch
         }
 
         withContext(Dispatchers.Main) { 
-            onResult(true, "Processing your studio track...", null, false, "A", 120) 
+            onResult(true, "Processing...", null, false, "A") 
         }
 
-        // Detect key and BPM
-        val (key, bpm) = AudioEngine.detectKeyAndBPM(rawAudio)
+        val (key, _) = AudioEngine.detectKeyAndBPM(rawAudio)
 
         val beat = withContext(Dispatchers.Default) { 
             AudioEngine.generateProceduralBeat(context, rawAudio.size / AudioEngine.SAMPLE_RATE.toFloat(), rawAudio) 
@@ -328,8 +207,8 @@ private fun runRecordingProcess(
         FileSaver.saveAsWav(context, finalMix, fileName)
 
         withContext(Dispatchers.Main) { 
-            onResult(false, "Saved to Music/SingTuneStudio!", finalMix, true, key, bpm)
-            Toast.makeText(context, "Song saved! Key: $key, BPM: $bpm", Toast.LENGTH_LONG).show()
+            onResult(false, "Saved! Key: $key", finalMix, true, key)
+            Toast.makeText(context, "Song saved!", Toast.LENGTH_SHORT).show()
         }
     }
 }
