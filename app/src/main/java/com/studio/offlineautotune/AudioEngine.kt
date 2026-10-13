@@ -117,4 +117,13 @@ object AudioEngine {
             val sample = audio[i].toFloat()
             val absSample = abs(sample)
             val outSample = if (absSample > threshold) {
-                threshold + (
+                threshold + (absSample - threshold) / ratio
+            } else {
+                absSample
+            }
+            val finalSample = if (sample < 0) -outSample else outSample
+            out[i] = finalSample.toInt().coerceIn(-32768, 32767).toShort()
+        }
+        return out
+    }
+}
