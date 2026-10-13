@@ -10,11 +10,10 @@ object AudioEngine {
     const val CHANNEL_IN = AudioFormat.CHANNEL_IN_MONO
     const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
 
-    // Fast pseudo-random generator (prevents CPU lag)
     private var seed = 12345L
-    private fun fastRandom(): Double {
+    private fun fastRandom(): Float {
         seed = (seed * 1103515245L + 12345L) and 0x7fffffffL
-        return seed.toDouble() / 0x7fffffffL
+        return (seed.toDouble() / 0x7fffffffL).toFloat()
     }
 
     fun createAudioRecord(): AudioRecord {
@@ -24,47 +23,40 @@ object AudioEngine {
         )
     }
 
-    // ============================================
-    // 1. ADVANCED NOISE REMOVAL PIPELINE
-    // ============================================
+    // 1. ADVANCED NOISE REMOVAL PIPELINE (Type-Safe)
     private fun removeNoise(audio: ShortArray): ShortArray {
         if (audio.isEmpty()) return audio
         
         val out = FloatArray(audio.size)
         
-        // A. Adaptive Noise Floor Detection (first 500ms)
         val noiseProfileSamples = minOf(SAMPLE_RATE / 2, audio.size)
-        var noiseRMS = 0.0
+        var noiseRms = 0.0f
         for (i in 0 until noiseProfileSamples) {
             val s = audio[i].toFloat()
-            noiseRMS += s * s
+            noiseRms += s * s
         }
-        noiseRMS = sqrt(noiseRMS / noiseProfileSamples)
-        val gateThreshold = (noiseRMS * 3.0).coerceAtLeast(400.0)
+        noiseRms = sqrt(noiseRms / noiseProfileSamples.toFloat())
+        val gateThreshold = (noiseRms * 3.0f).coerceAtLeast(400.0f)
         
-        // B. High-pass filter coefficients (80Hz cutoff - removes rumble)
-        val rc = 1.0 / (2 * PI * 80)
-        val dt = 1.0 / SAMPLE_RATE
+        val rc = 1.0f / (2.0f * PI.toFloat() * 80.0f)
+        val dt = 1.0f / SAMPLE_RATE.toFloat()
         val alpha = rc / (rc + dt)
         
-        var prevIn = 0.0
-        var prevOut = 0.0
+        var prevIn = 0.0f
+        var prevOut = 0.0f
         
-        // C. Apply smooth noise gate + high-pass filter
         for (i in audio.indices) {
             val input = audio[i].toFloat()
             val absInput = abs(input)
             
-            // Smooth noise gate (quadratic expander - no clicks)
             val gateGain = if (absInput > gateThreshold) {
-                1.0
+                1.0f
             } else {
                 val ratio = absInput / gateThreshold
-                ratio * ratio // Quadratic curve for smooth reduction
+                ratio * ratio
             }
             val gated = input * gateGain
             
-            // High-pass filter (removes low-frequency rumble)
             val filtered = alpha * (prevOut + gated - prevIn)
             prevIn = gated
             prevOut = filtered
@@ -72,7 +64,6 @@ object AudioEngine {
             out[i] = filtered
         }
         
-        // Convert back to ShortArray
         val finalOut = ShortArray(audio.size)
         for (i in out.indices) {
             finalOut[i] = out[i].toInt().coerceIn(-32768, 32767).toShort()
@@ -80,9 +71,7 @@ object AudioEngine {
         return finalOut
     }
 
-    // ============================================
-    // 2. KEY DETECTION
-    // ============================================
+    // 2. KEY DETECTION (Type-Safe)
     private fun detectDominantPitch(audio: ShortArray): Float {
         val analyzeLength = minOf(audio.size, SAMPLE_RATE * 2)
         if (analyzeLength < 1024) return 110.0f
@@ -95,7 +84,7 @@ object AudioEngine {
         var rms = 0.0f
         
         for (i in 0 until analyzeLength) rms += buffer[i] * buffer[i]
-        rms = sqrt(rms / analyzeLength)
+        rms = sqrt(rms / analyzeLength.toFloat())
         if (rms < 0.01f) return 110.0f 
 
         var lastCorrelation = 1.0f
@@ -104,7 +93,7 @@ object AudioEngine {
             for (i in 0 until minOf(analyzeLength - offset, 2000)) {
                 correlation += abs(buffer[i] - buffer[i + offset])
             }
-            correlation = 1.0f - (correlation / minOf(analyzeLength - offset, 2000))
+            correlation = 1.0f - (correlation / minOf(analyzeLength - offset, 2000).toFloat())
             
             if (correlation > 0.9f && correlation > lastCorrelation) {
                 bestCorrelation = correlation
@@ -112,22 +101,20 @@ object AudioEngine {
             }
             lastCorrelation = correlation
         }
-        return if (bestOffset > 0) SAMPLE_RATE.toFloat() / bestOffset else 110.0f
+        return if (bestOffset > 0) SAMPLE_RATE.toFloat() / bestOffset.toFloat() else 110.0f
     }
 
     private fun snapToNearestNote(freq: Float): Float {
-        val midiNote = 12 * log2(freq / 440.0) + 69
+        val midiNote = (12.0 * log2(freq.toDouble() / 440.0) + 69.0).toFloat()
         val roundedNote = round(midiNote)
-        return 440.0 * 2.0.pow((roundedNote - 69) / 12.0).toFloat()
+        return (440.0 * 2.0.pow((roundedNote - 69.0) / 12.0)).toFloat()
     }
 
-    // ============================================
-    // 3. PROFESSIONAL BEAT GENERATOR
-    // ============================================
+    // 3. PROFESSIONAL BEAT GENERATOR (Type-Safe)
     fun generateProceduralBeat(durationSec: Float, vocalAudio: ShortArray, bpm: Int = 120): ShortArray {
         val totalSamples = (SAMPLE_RATE * durationSec).toInt()
         val beat = FloatArray(totalSamples)
-        val samplesPerBeat = (60.0 / bpm * SAMPLE_RATE).toInt()
+        val samplesPerBeat = (60.0f / bpm.toFloat() * SAMPLE_RATE.toFloat()).toInt()
         val samplesPerBar = samplesPerBeat * 4
         val sixteenth = samplesPerBeat / 4
         val eighth = samplesPerBeat / 2
@@ -135,15 +122,14 @@ object AudioEngine {
         val detectedPitch = detectDominantPitch(vocalAudio)
         val rootFreq = snapToNearestNote(detectedPitch)
         
-        // I - V - vi - IV Pop Progression
         val progression = listOf(
-            listOf(1.0, 1.2599, 1.4983),    // I
-            listOf(1.4983, 1.8877, 2.2449), // V
-            listOf(1.6818, 2.0, 2.3784),    // vi
-            listOf(1.3348, 1.6818, 2.0)     // IV
+            listOf(1.0f, 1.2599f, 1.4983f),
+            listOf(1.4983f, 1.8877f, 2.2449f),
+            listOf(1.6818f, 2.0f, 2.3784f),
+            listOf(1.3348f, 1.6818f, 2.0f)
         )
 
-        var maxVal = 0.0
+        var maxVal = 0.0f
 
         for (i in 0 until totalSamples) {
             val beatPos = i % samplesPerBeat
@@ -151,62 +137,62 @@ object AudioEngine {
             val currentBar = (i / samplesPerBar) % 4
             val currentChord = progression[currentBar]
             
-            var sample = 0.0
+            var sample = 0.0f
             
             // KICK
-            if (beatPos < SAMPLE_RATE * 0.15) {
-                val t = beatPos.toDouble() / SAMPLE_RATE
-                val freq = 150.0 * exp(-t * 40) + 40.0
-                sample += sin(2 * PI * freq * t) * exp(-t * 12) * 0.9
+            if (beatPos < SAMPLE_RATE * 0.15f) {
+                val t = beatPos.toFloat() / SAMPLE_RATE.toFloat()
+                val freq = 150.0f * exp(-t * 40.0f) + 40.0f
+                sample += sin(2.0f * PI.toFloat() * freq * t) * exp(-t * 12.0f) * 0.9f
             }
             
             // SNARE/CLAP
             val isSnareBeat = (barPos / samplesPerBeat) % 2 == 1
-            if (isSnareBeat && beatPos < SAMPLE_RATE * 0.15) {
-                val t = beatPos.toDouble() / SAMPLE_RATE
-                sample += (fastRandom() * 2 - 1) * exp(-t * 25) * 0.6
-                sample += sin(2 * PI * 200 * t) * exp(-t * 30) * 0.4
+            if (isSnareBeat && beatPos < SAMPLE_RATE * 0.15f) {
+                val t = beatPos.toFloat() / SAMPLE_RATE.toFloat()
+                sample += (fastRandom() * 2.0f - 1.0f) * exp(-t * 25.0f) * 0.6f
+                sample += sin(2.0f * PI.toFloat() * 200.0f * t) * exp(-t * 30.0f) * 0.4f
             }
             
-            // HI-HATS (16th notes with accents)
+            // HI-HATS
             val hatPos = i % sixteenth
-            if (hatPos < SAMPLE_RATE * 0.01) {
-                val t = hatPos.toDouble() / SAMPLE_RATE
+            if (hatPos < SAMPLE_RATE * 0.01f) {
+                val t = hatPos.toFloat() / SAMPLE_RATE.toFloat()
                 val isAccent = (i % samplesPerBeat) / sixteenth % 2 == 1
-                val vol = if (isAccent) 0.25 else 0.1
-                sample += (fastRandom() * 2 - 1) * exp(-t * 120) * vol
+                val vol = if (isAccent) 0.25f else 0.1f
+                sample += (fastRandom() * 2.0f - 1.0f) * exp(-t * 120.0f) * vol
             }
             
-            // DRUM FILL (End of 4th bar)
+            // DRUM FILL
             if (currentBar == 3 && barPos > samplesPerBeat * 3) {
                 val fillPos = i % (samplesPerBeat / 8)
-                if (fillPos < SAMPLE_RATE * 0.015) {
-                    sample += (fastRandom() * 2 - 1) * 0.3
+                if (fillPos < SAMPLE_RATE * 0.015f) {
+                    sample += (fastRandom() * 2.0f - 1.0f) * 0.3f
                 }
             }
 
-            // BASS (Rhythmic 8th notes)
+            // BASS
             val bassNotePos = i % eighth
-            val bassFreq = rootFreq * (if (bassNotePos < eighth / 2) 1.0 else 0.5)
-            val bassSample = sin(2 * PI * bassFreq * i.toDouble() / SAMPLE_RATE) * 0.4
+            val bassFreq = rootFreq * (if (bassNotePos < eighth / 2) 1.0f else 0.5f)
+            val bassSample = sin(2.0f * PI.toFloat() * bassFreq * i.toFloat() / SAMPLE_RATE.toFloat()) * 0.4f
             
-            // CHORD PAD (Detuned stack)
-            var chordSample = 0.0
+            // CHORD PAD
+            var chordSample = 0.0f
             for (mult in currentChord) {
                 val freq = rootFreq * mult
-                chordSample += sin(2 * PI * freq * i.toDouble() / SAMPLE_RATE) * 0.12
-                chordSample += sin(2 * PI * (freq * 1.005) * i.toDouble() / SAMPLE_RATE) * 0.12
+                chordSample += sin(2.0f * PI.toFloat() * freq * i.toFloat() / SAMPLE_RATE.toFloat()) * 0.12f
+                chordSample += sin(2.0f * PI.toFloat() * (freq * 1.005f) * i.toFloat() / SAMPLE_RATE.toFloat()) * 0.12f
             }
             
             // ARPEGGIO
             val arpNoteIndex = (i / sixteenth) % currentChord.size
-            val arpFreq = rootFreq * currentChord[arpNoteIndex] * 2.0
-            val arpEnv = exp(-((i % sixteenth).toDouble() / SAMPLE_RATE) * 15)
-            val arpSample = sin(2 * PI * arpFreq * i.toDouble() / SAMPLE_RATE) * arpEnv * 0.15
+            val arpFreq = rootFreq * currentChord[arpNoteIndex] * 2.0f
+            val arpEnv = exp(-((i % sixteenth).toFloat() / SAMPLE_RATE.toFloat()) * 15.0f)
+            val arpSample = sin(2.0f * PI.toFloat() * arpFreq * i.toFloat() / SAMPLE_RATE.toFloat()) * arpEnv * 0.15f
 
             // SIDECHAIN PUMPING
-            val kickDecay = exp(-beatPos.toDouble() / SAMPLE_RATE * 20)
-            val sidechainGain = 1.0 - (kickDecay * 0.75)
+            val kickDecay = exp(-beatPos.toFloat() / SAMPLE_RATE.toFloat() * 20.0f)
+            val sidechainGain = 1.0f - (kickDecay * 0.75f)
             
             sample += (bassSample + chordSample + arpSample) * sidechainGain
             
@@ -214,24 +200,21 @@ object AudioEngine {
             if (abs(sample) > maxVal) maxVal = abs(sample)
         }
         
-        if (maxVal == 0.0) maxVal = 1.0
+        if (maxVal == 0.0f) maxVal = 1.0f
         val finalBeat = ShortArray(totalSamples)
         for (i in 0 until totalSamples) {
-            finalBeat[i] = ((beat[i] / maxVal) * 32767 * 0.85).toInt().coerceIn(-32768, 32767).toShort()
+            finalBeat[i] = ((beat[i] / maxVal) * 32767.0f * 0.85f).toInt().coerceIn(-32768, 32767).toShort()
         }
         
         return finalBeat
     }
 
-    // ============================================
-    // 4. MASTER VOCAL CHAIN + MIX
-    // ============================================
+    // 4. MASTER VOCAL CHAIN + MIX (Type-Safe)
     fun processVocalAndMix(rawVocal: ShortArray, beat: ShortArray): ShortArray {
-        // PIPELINE ORDER (Critical for professional sound):
-        val cleaned = removeNoise(rawVocal)           // 1. Remove background noise
-        val pitched = pitchShift(cleaned, 1.02f)      // 2. Subtle auto-tune
-        val effected = applyStudioEffects(pitched)    // 3. Reverb + Echo
-        val compressed = applyCompression(effected)   // 4. Dynamic compression
+        val cleaned = removeNoise(rawVocal)
+        val pitched = pitchShift(cleaned, 1.02f)
+        val effected = applyStudioEffects(pitched)
+        val compressed = applyCompression(effected)
         
         val finalSize = maxOf(compressed.size, beat.size)
         val finalMix = ShortArray(finalSize)
@@ -239,7 +222,7 @@ object AudioEngine {
             val vocalSample = if (i < compressed.size) compressed[i].toInt() else 0
             val beatSample = if (i < beat.size) beat[i].toInt() else 0
             
-            val mixed = (vocalSample * 0.85 + beatSample * 0.6).toInt()
+            val mixed = (vocalSample * 0.85f + beatSample * 0.6f).toInt()
             finalMix[i] = mixed.coerceIn(-32768, 32767).toShort()
         }
         return finalMix
@@ -253,7 +236,7 @@ object AudioEngine {
             val indexHigh = (indexLow + 1).coerceAtMost(audio.size - 1)
             val frac = srcIndex - indexLow
             if (indexLow >= 0 && indexLow < audio.size) {
-                val sample = audio[indexLow].toInt() * (1 - frac) + audio[indexHigh].toInt() * frac
+                val sample = audio[indexLow].toInt() * (1.0f - frac) + audio[indexHigh].toInt() * frac
                 out[i] = sample.toInt().coerceIn(-32768, 32767).toShort()
             }
         }
@@ -262,9 +245,9 @@ object AudioEngine {
 
     private fun applyStudioEffects(audio: ShortArray): ShortArray {
         val out = FloatArray(audio.size)
-        val delaySamples = (SAMPLE_RATE * 0.3).toInt()
-        val reverbDelay1 = (SAMPLE_RATE * 0.05).toInt()
-        val reverbDelay2 = (SAMPLE_RATE * 0.08).toInt()
+        val delaySamples = (SAMPLE_RATE * 0.3f).toInt()
+        val reverbDelay1 = (SAMPLE_RATE * 0.05f).toInt()
+        val reverbDelay2 = (SAMPLE_RATE * 0.08f).toInt()
         
         for (i in audio.indices) {
             var sample = audio[i].toFloat()
