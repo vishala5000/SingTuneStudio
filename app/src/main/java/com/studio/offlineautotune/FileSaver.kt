@@ -52,8 +52,6 @@ object FileSaver {
         val blockAlign = channels * bitDepth / 8
         val totalDataLen = totalAudioLen * 2 + 36
 
-        // Kotlin's .toByte() automatically truncates to the lowest 8 bits, 
-        // completely eliminating the need for ambiguous "and 0xff" bitwise operations.
         val header = byteArrayOf(
             'R'.code.toByte(), 'I'.code.toByte(), 'F'.code.toByte(), 'F'.code.toByte(),
             totalDataLen.toByte(), (totalDataLen shr 8).toByte(),
