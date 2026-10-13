@@ -26,6 +26,10 @@ jobs:
             ~/.gradle/wrapper
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
 
+      # --- NEW STEP: Automatically generate the missing gradlew script ---
+      - name: Generate Gradle Wrapper
+        run: gradle wrapper --gradle-version 8.2
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
