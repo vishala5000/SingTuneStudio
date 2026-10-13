@@ -59,10 +59,12 @@ fun StudioApp() {
             isRecording = true
             isRecordingAtomic.set(true)
             statusText = "Recording... Tap to Stop"
-            runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio ->
+            runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio, done ->
                 isProcessing = processing
                 statusText = status
                 if (audio != null) recordedAudio = audio
+                // FIX: Reset isRecording when recording is fully done
+                if (done) isRecording = false
             }
         } else {
             statusText = "Mic permission denied"
@@ -82,7 +84,14 @@ fun StudioApp() {
             Box(
                 modifier = Modifier
                     .size(180.dp)
-                    .background(if (isRecording) Color.Red else Color(0xFFBB86FC), CircleShape)
+                    .background(
+                        when {
+                            isProcessing -> Color(0xFF6200EE)  // Purple while processing
+                            isRecording -> Color.Red           // Red while recording
+                            else -> Color(0xFFBB86FC)          // Purple when idle
+                        },
+                        CircleShape
+                    )
                     .clickable {
                         if (isProcessing) return@clickable
                         if (!isRecording) {
@@ -90,22 +99,27 @@ fun StudioApp() {
                                 isRecording = true
                                 isRecordingAtomic.set(true)
                                 statusText = "Recording... Tap to Stop"
-                                runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio ->
+                                runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio, done ->
                                     isProcessing = processing
                                     statusText = status
                                     if (audio != null) recordedAudio = audio
+                                    if (done) isRecording = false  // FIX: Reset state
                                 }
                             } else {
                                 permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             }
                         } else {
+                            // Stop recording
                             isRecordingAtomic.set(false)
                         }
                     },
                 contentAlignment = Alignment.Center
             ) {
-                if (isProcessing) CircularProgressIndicator(color = Color.White)
-                else Text(if (isRecording) "STOP" else "REC", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                when {
+                    isProcessing -> CircularProgressIndicator(color = Color.White)
+                    isRecording -> Text("STOP", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                    else -> Text("REC", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                }
             }
 
             Spacer(modifier = Modifier.height(40.dp))
@@ -113,7 +127,10 @@ fun StudioApp() {
             Spacer(modifier = Modifier.height(20.dp))
 
             if (recordedAudio != null && !isRecording && !isProcessing) {
-                Button(onClick = { playAudio(recordedAudio!!) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF03DAC5))) {
+                Button(
+                    onClick = { playAudio(recordedAudio!!) }, 
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF03DAC5))
+                ) {
                     Text("Play Final Studio Mix", color = Color.Black)
                 }
             }
@@ -125,7 +142,7 @@ private fun runRecordingProcess(
     scope: kotlinx.coroutines.CoroutineScope,
     isRecordingAtomic: AtomicBoolean,
     context: android.content.Context,
-    onResult: (isProcessing: Boolean, status: String, audio: ShortArray?) -> Unit
+    onResult: (isProcessing: Boolean, status: String, audio: ShortArray?, done: Boolean) -> Unit
 ) {
     scope.launch(Dispatchers.IO) {
         val audioRecord = AudioEngine.createAudioRecord()
@@ -143,13 +160,16 @@ private fun runRecordingProcess(
         val rawAudio = audioBuffer.toShortArray()
 
         if (rawAudio.isEmpty()) {
-            withContext(Dispatchers.Main) { onResult(false, "Recording was empty. Try again.", null) }
+            withContext(Dispatchers.Main) { 
+                onResult(false, "Recording was empty. Try again.", null, true) 
+            }
             return@launch
         }
 
-        withContext(Dispatchers.Main) { onResult(true, "Processing your studio track...", null) }
+        withContext(Dispatchers.Main) { 
+            onResult(true, "Processing your studio track...", null, false) 
+        }
 
-        // UPDATED: Now passes context to load real audio files
         val beat = withContext(Dispatchers.Default) { 
             AudioEngine.generateProceduralBeat(context, rawAudio.size / AudioEngine.SAMPLE_RATE.toFloat(), rawAudio) 
         }
@@ -162,7 +182,8 @@ private fun runRecordingProcess(
         FileSaver.saveAsWav(context, finalMix, fileName)
 
         withContext(Dispatchers.Main) { 
-            onResult(false, "Saved to Music/SingTuneStudio!", finalMix)
+            // FIX: Pass done=true so UI resets the button state
+            onResult(false, "Saved to Music/SingTuneStudio!", finalMix, true)
             Toast.makeText(context, "Song saved!", Toast.LENGTH_SHORT).show()
         }
     }
