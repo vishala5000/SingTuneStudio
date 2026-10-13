@@ -21,7 +21,7 @@ object AudioEngine {
         )
     }
 
-    // Robust WAV loader: handles mono/stereo, skips header properly
+    // Robust WAV loader
     private fun loadWavFromRaw(context: Context, resourceId: Int): ShortArray {
         val inputStream = context.resources.openRawResource(resourceId)
         val byteArrayOutputStream = ByteArrayOutputStream()
@@ -32,7 +32,6 @@ object AudioEngine {
         }
         val bytes = byteArrayOutputStream.toByteArray()
         
-        // Parse WAV header to find data chunk
         var dataOffset = 12
         while (dataOffset < bytes.size - 8) {
             val chunkId = String(bytes, dataOffset, 4, Charsets.US_ASCII)
@@ -45,18 +44,15 @@ object AudioEngine {
             dataOffset += 8 + chunkSize
         }
         
-        // Read number of channels from header (bytes 22-23)
         val channels = if (bytes.size > 23) {
             ByteBuffer.wrap(bytes, 22, 2).order(ByteOrder.LITTLE_ENDIAN).getShort().toInt()
         } else 1
         
-        // Extract PCM data
         val pcmBytes = bytes.copyOfRange(dataOffset, bytes.size)
         val shortBuffer = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
         val rawSamples = ShortArray(shortBuffer.remaining())
         shortBuffer.get(rawSamples)
         
-        // If stereo, convert to mono by averaging channels
         return if (channels == 2) {
             val mono = ShortArray(rawSamples.size / 2)
             for (i in mono.indices) {
@@ -68,7 +64,6 @@ object AudioEngine {
         }
     }
 
-    // Loop audio seamlessly to match vocal duration
     private fun loopAudio(audio: ShortArray, durationSec: Float): ShortArray {
         if (audio.isEmpty()) return ShortArray(0)
         val targetSamples = (SAMPLE_RATE * durationSec).toInt()
@@ -79,15 +74,13 @@ object AudioEngine {
         return looped
     }
 
-    // Generate beat using REAL audio loops at ORIGINAL quality (NO pitch shifting)
+    // Generate beat using REAL audio loops at ORIGINAL quality
     fun generateProceduralBeat(context: Context, durationSec: Float, vocalAudio: ShortArray): ShortArray {
-        // Load loops at their original, professional quality
         val drumLoop = loadWavFromRaw(context, R.raw.drum_loop)
         val bassLoop = loadWavFromRaw(context, R.raw.bass_loop)
         val chordLoop = loadWavFromRaw(context, R.raw.chord_loop)
         val arpLoop = loadWavFromRaw(context, R.raw.arp_loop)
         
-        // Loop to match vocal duration
         val drums = loopAudio(drumLoop, durationSec)
         val bass = loopAudio(bassLoop, durationSec)
         val chords = loopAudio(chordLoop, durationSec)
@@ -102,7 +95,6 @@ object AudioEngine {
             val chordSample = chords[i].toFloat()
             val arpSample = arp[i].toFloat()
             
-            // Professional mix: drums drive the track, arp is subtle
             val mixed = (drumSample * 0.85f + 
                         bassSample * 0.70f + 
                         chordSample * 0.35f + 
@@ -113,7 +105,102 @@ object AudioEngine {
         return beat
     }
 
-    // --- CRYSTAL CLEAR VOCAL CHAIN ---
+    // --- VOCAL CHAIN WITH GENTLE AUTO-TUNE TO MATCH LOOP KEY ---
+    
+    // Gentle pitch correction: snaps vocal to nearest note in A minor scale
+    private fun autoTuneToAmScale(audio: ShortArray): ShortArray {
+        val out = ShortArray(audio.size)
+        val windowSize = 2048
+        val hopSize = 1024
+        
+        // A minor scale frequencies (A3 to A5 range)
+        val amScale = listOf(
+            220.0f, 246.94f, 261.63f, 293.66f, 329.63f, 349.23f, 392.0f, 440.0f,
+            493.88f, 523.25f, 587.33f, 659.25f, 698.46f, 783.99f, 880.0f
+        )
+        
+        for (i in 0 until audio.size step hopSize) {
+            val end = minOf(i + windowSize, audio.size)
+            val window = audio.copyOfRange(i, end)
+            
+            // Simple pitch detection for this window
+            val detectedPitch = detectPitchInWindow(window)
+            
+            if (detectedPitch > 0) {
+                // Find nearest note in A minor scale
+                val nearestNote = amScale.minByOrNull { abs(it - detectedPitch) } ?: detectedPitch
+                val shiftFactor = nearestNote / detectedPitch
+                
+                // Apply very gentle pitch correction (only if close to scale)
+                if (abs(shiftFactor - 1.0f) < 0.1f) {
+                    for (j in 0 until window.size) {
+                        val srcIndex = j * shiftFactor
+                        val indexLow = srcIndex.toInt()
+                        val indexHigh = (indexLow + 1).coerceAtMost(window.size - 1)
+                        val frac = srcIndex - indexLow
+                        if (indexLow >= 0 && indexLow < window.size) {
+                            val sample = window[indexLow].toFloat() * (1.0f - frac) + 
+                                        window[indexHigh].toFloat() * frac
+                            val globalIndex = i + j
+                            if (globalIndex < out.size) {
+                                out[globalIndex] = sample.toInt().coerceIn(-32768, 32767).toShort()
+                            }
+                        }
+                    }
+                } else {
+                    // Too far from scale, keep original
+                    for (j in 0 until window.size) {
+                        val globalIndex = i + j
+                        if (globalIndex < out.size) {
+                            out[globalIndex] = window[j]
+                        }
+                    }
+                }
+            } else {
+                // No pitch detected (silence), keep original
+                for (j in 0 until window.size) {
+                    val globalIndex = i + j
+                    if (globalIndex < out.size) {
+                        out[globalIndex] = window[j]
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    private fun detectPitchInWindow(audio: ShortArray): Float {
+        if (audio.size < 512) return 0f
+        
+        val buffer = FloatArray(audio.size)
+        for (i in audio.indices) buffer[i] = audio[i].toFloat() / 32768.0f
+
+        var bestOffset = -1
+        var bestCorrelation = 0.0f
+        var rms = 0.0f
+        
+        for (i in buffer.indices) rms += buffer[i] * buffer[i]
+        rms = sqrt(rms / buffer.size)
+        if (rms < 0.02f) return 0f // Too quiet
+
+        var lastCorrelation = 1.0f
+        for (offset in 50 until minOf(buffer.size / 2, 1000)) {
+            var correlation = 0.0f
+            for (i in 0 until minOf(buffer.size - offset, 1000)) {
+                correlation += abs(buffer[i] - buffer[i + offset])
+            }
+            correlation = 1.0f - (correlation / minOf(buffer.size - offset, 1000))
+            
+            if (correlation > 0.85f && correlation > lastCorrelation) {
+                bestCorrelation = correlation
+                bestOffset = offset
+            }
+            lastCorrelation = correlation
+        }
+        
+        return if (bestOffset > 0) SAMPLE_RATE.toFloat() / bestOffset.toFloat() else 0f
+    }
+
     private fun removeMud(audio: ShortArray): ShortArray {
         val out = ShortArray(audio.size)
         val rc = 1.0f / (2.0f * PI.toFloat() * 60.0f)
@@ -180,10 +267,12 @@ object AudioEngine {
     }
 
     fun processVocalAndMix(rawVocal: ShortArray, beat: ShortArray): ShortArray {
-        val clean = removeMud(rawVocal)
-        val clear = addClarity(clean)
-        val compressed = applyCompression(clear)
-        val effected = applyStudioEffects(compressed)
+        val tuned = autoTuneToAmScale(rawVocal)      // Gentle auto-tune to match loop key
+        val clean = removeMud(tuned)                  // Remove low-end mud
+        val clear = addClarity(clean)                 // Add presence
+        val compressed = applyCompression(clear)      // Smooth dynamics
+        val effected = applyStudioEffects(compressed) // Reverb + echo
+        
         val finalSize = maxOf(effected.size, beat.size)
         val finalMix = ShortArray(finalSize)
         for (i in 0 until finalSize) {
