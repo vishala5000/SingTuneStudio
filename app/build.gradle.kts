@@ -9,7 +9,7 @@ android {
 
     defaultConfig {
         applicationId = "com.studio.offlineautotune"
-        minSdk = 26
+        minSdk = 29 // Updated to 29 for MediaStore.VOLUME_EXTERNAL_PRIMARY compatibility
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
