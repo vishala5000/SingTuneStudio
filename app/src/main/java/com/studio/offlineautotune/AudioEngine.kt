@@ -21,7 +21,6 @@ object AudioEngine {
         )
     }
 
-    // 100% Offline Procedural Beat Generator
     fun generateProceduralBeat(durationSec: Float, bpm: Int = 120): ShortArray {
         val totalSamples = (SAMPLE_RATE * durationSec).toInt()
         val beat = ShortArray(totalSamples)
@@ -50,16 +49,16 @@ object AudioEngine {
             val bassFreq = 110.0 
             sample += sin(2 * PI * bassFreq * i.toDouble() / SAMPLE_RATE) * 0.3 * (if (beatPos < samplesPerBeat / 2) 1.0 else 0.5)
 
-            beat[i] = (sample * 32767 * 0.6).toInt().toShort().coerceIn(Short.MIN_VALUE, Short.MAX_VALUE)
+            // Safe Int coercion before Short conversion
+            beat[i] = (sample * 32767 * 0.6).toInt().coerceIn(-32768, 32767).toShort()
         }
         return beat
     }
 
-    // Studio DSP Pipeline
     fun processVocalAndMix(rawVocal: ShortArray, beat: ShortArray): ShortArray {
-        val pitched = pitchShift(rawVocal, 1.02f) // Auto-tune pitch shift
-        val effected = applyStudioEffects(pitched) // Reverb & Echo
-        val compressed = applyCompression(effected) // Dynamic Compression
+        val pitched = pitchShift(rawVocal, 1.02f)
+        val effected = applyStudioEffects(pitched)
+        val compressed = applyCompression(effected)
         
         val finalSize = maxOf(compressed.size, beat.size)
         val finalMix = ShortArray(finalSize)
@@ -68,7 +67,7 @@ object AudioEngine {
             val beatSample = if (i < beat.size) beat[i].toInt() else 0
             
             val mixed = (vocalSample * 0.75 + beatSample * 0.6).toInt()
-            finalMix[i] = mixed.coerceIn(Short.MIN_VALUE, Short.MAX_VALUE).toShort()
+            finalMix[i] = mixed.coerceIn(-32768, 32767).toShort()
         }
         return finalMix
     }
@@ -81,7 +80,8 @@ object AudioEngine {
             val indexHigh = (indexLow + 1).coerceAtMost(audio.size - 1)
             val frac = srcIndex - indexLow
             if (indexLow >= 0 && indexLow < audio.size) {
-                out[i] = (audio[indexLow] * (1 - frac) + audio[indexHigh] * frac).toInt().toShort()
+                val sample = audio[indexLow].toInt() * (1 - frac) + audio[indexHigh].toInt() * frac
+                out[i] = sample.toInt().coerceIn(-32768, 32767).toShort()
             }
         }
         return out
@@ -103,7 +103,7 @@ object AudioEngine {
         
         val finalOut = ShortArray(audio.size)
         for (i in out.indices) {
-            finalOut[i] = out[i].toInt().coerceIn(Short.MIN_VALUE, Short.MAX_VALUE).toShort()
+            finalOut[i] = out[i].toInt().coerceIn(-32768, 32767).toShort()
         }
         return finalOut
     }
@@ -117,12 +117,4 @@ object AudioEngine {
             val sample = audio[i].toFloat()
             val absSample = abs(sample)
             val outSample = if (absSample > threshold) {
-                threshold + (absSample - threshold) / ratio
-            } else {
-                absSample
-            }
-            out[i] = (if (sample < 0) -outSample else outSample).toInt().coerceIn(Short.MIN_VALUE, Short.MAX_VALUE).toShort()
-        }
-        return out
-    }
-}
+                threshold + (
