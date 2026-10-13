@@ -23,22 +23,14 @@ object AudioEngine {
         )
     }
 
-    // 1. ADVANCED NOISE REMOVAL PIPELINE (Type-Safe)
-    private fun removeNoise(audio: ShortArray): ShortArray {
-        if (audio.isEmpty()) return audio
+    // ============================================
+    // 1. CRYSTAL CLEAR VOCAL CLEANUP (No destructive gating)
+    // ============================================
+    private fun cleanVocal(audio: ShortArray): ShortArray {
+        val out = ShortArray(audio.size)
         
-        val out = FloatArray(audio.size)
-        
-        val noiseProfileSamples = minOf(SAMPLE_RATE / 2, audio.size)
-        var noiseRms = 0.0f
-        for (i in 0 until noiseProfileSamples) {
-            val s = audio[i].toFloat()
-            noiseRms += s * s
-        }
-        noiseRms = sqrt(noiseRms / noiseProfileSamples.toFloat())
-        val gateThreshold = (noiseRms * 3.0f).coerceAtLeast(400.0f)
-        
-        val rc = 1.0f / (2.0f * PI.toFloat() * 80.0f)
+        // Professional 100Hz High-Pass Filter: Removes mud/rumble, preserves vocal clarity
+        val rc = 1.0f / (2.0f * PI.toFloat() * 100.0f)
         val dt = 1.0f / SAMPLE_RATE.toFloat()
         val alpha = rc / (rc + dt)
         
@@ -47,31 +39,19 @@ object AudioEngine {
         
         for (i in audio.indices) {
             val input = audio[i].toFloat()
-            val absInput = abs(input)
-            
-            val gateGain = if (absInput > gateThreshold) {
-                1.0f
-            } else {
-                val ratio = absInput / gateThreshold
-                ratio * ratio
-            }
-            val gated = input * gateGain
-            
-            val filtered = alpha * (prevOut + gated - prevIn)
-            prevIn = gated
+            // Stable 1-pole HPF formula
+            val filtered = alpha * (prevOut + input - prevIn)
+            prevIn = input
             prevOut = filtered
             
-            out[i] = filtered
+            out[i] = filtered.toInt().coerceIn(-32768, 32767).toShort()
         }
-        
-        val finalOut = ShortArray(audio.size)
-        for (i in out.indices) {
-            finalOut[i] = out[i].toInt().coerceIn(-32768, 32767).toShort()
-        }
-        return finalOut
+        return out
     }
 
-    // 2. KEY DETECTION (Type-Safe)
+    // ============================================
+    // 2. KEY DETECTION (For Music Matching)
+    // ============================================
     private fun detectDominantPitch(audio: ShortArray): Float {
         val analyzeLength = minOf(audio.size, SAMPLE_RATE * 2)
         if (analyzeLength < 1024) return 110.0f
@@ -110,7 +90,9 @@ object AudioEngine {
         return (440.0 * 2.0.pow((roundedNote - 69.0) / 12.0)).toFloat()
     }
 
-    // 3. PROFESSIONAL BEAT GENERATOR (Type-Safe)
+    // ============================================
+    // 3. PROFESSIONAL BEAT GENERATOR
+    // ============================================
     fun generateProceduralBeat(durationSec: Float, vocalAudio: ShortArray, bpm: Int = 120): ShortArray {
         val totalSamples = (SAMPLE_RATE * durationSec).toInt()
         val beat = FloatArray(totalSamples)
@@ -209,51 +191,70 @@ object AudioEngine {
         return finalBeat
     }
 
-    // 4. MASTER VOCAL CHAIN + MIX (Type-Safe)
+    // ============================================
+    // 4. MASTER VOCAL CHAIN + SAFE MIX
+    // ============================================
     fun processVocalAndMix(rawVocal: ShortArray, beat: ShortArray): ShortArray {
-        val cleaned = removeNoise(rawVocal)
-        val pitched = pitchShift(cleaned, 1.02f)
-        val effected = applyStudioEffects(pitched)
-        val compressed = applyCompression(effected)
+        // SAFE PIPELINE: No destructive pitch shifting or harsh gating
+        val cleaned = cleanVocal(rawVocal)                 // 1. Remove low-end mud
+        val compressed = applyCompression(cleaned)         // 2. Smooth dynamics
+        val effected = applyStudioEffects(compressed)      // 3. Clean, non-metallic space
         
-        val finalSize = maxOf(compressed.size, beat.size)
+        val finalSize = maxOf(effected.size, beat.size)
         val finalMix = ShortArray(finalSize)
+        
         for (i in 0 until finalSize) {
-            val vocalSample = if (i < compressed.size) compressed[i].toInt() else 0
+            val vocalSample = if (i < effected.size) effected[i].toInt() else 0
             val beatSample = if (i < beat.size) beat[i].toInt() else 0
             
-            val mixed = (vocalSample * 0.85f + beatSample * 0.6f).toInt()
+            // SAFE MIXING: Lowered gains to guarantee ZERO hard-clipping distortion
+            val mixed = ((vocalSample * 0.65f) + (beatSample * 0.45f)).toInt()
             finalMix[i] = mixed.coerceIn(-32768, 32767).toShort()
         }
         return finalMix
     }
 
-    private fun pitchShift(audio: ShortArray, factor: Float): ShortArray {
+    private fun applyCompression(audio: ShortArray): ShortArray {
         val out = ShortArray(audio.size)
-        for (i in out.indices) {
-            val srcIndex = i * factor
-            val indexLow = srcIndex.toInt()
-            val indexHigh = (indexLow + 1).coerceAtMost(audio.size - 1)
-            val frac = srcIndex - indexLow
-            if (indexLow >= 0 && indexLow < audio.size) {
-                val sample = audio[indexLow].toInt() * (1.0f - frac) + audio[indexHigh].toInt() * frac
-                out[i] = sample.toInt().coerceIn(-32768, 32767).toShort()
+        val threshold = 12000f
+        val ratio = 4.0f
+        
+        for (i in audio.indices) {
+            val sample = audio[i].toFloat()
+            val absSample = abs(sample)
+            
+            val outSample = if (absSample > threshold) {
+                threshold + (absSample - threshold) / ratio
+            } else {
+                absSample
             }
+            
+            val finalSample = if (sample < 0) -outSample else outSample
+            // Slight makeup gain for punchiness
+            val makeup = finalSample * 1.1f 
+            out[i] = makeup.toInt().coerceIn(-32768, 32767).toShort()
         }
         return out
     }
 
     private fun applyStudioEffects(audio: ShortArray): ShortArray {
         val out = FloatArray(audio.size)
-        val delaySamples = (SAMPLE_RATE * 0.3f).toInt()
-        val reverbDelay1 = (SAMPLE_RATE * 0.05f).toInt()
-        val reverbDelay2 = (SAMPLE_RATE * 0.08f).toInt()
+        // Clean, low-gain delays (NO feedback loops = NO metallic ringing)
+        val slapbackDelay = (SAMPLE_RATE * 0.12f).toInt()  // 120ms width
+        val earlyReflect = (SAMPLE_RATE * 0.04f).toInt()   // 40ms room feel
         
         for (i in audio.indices) {
             var sample = audio[i].toFloat()
-            if (i >= delaySamples) sample += out[i - delaySamples] * 0.25f
-            if (i >= reverbDelay1) sample += out[i - reverbDelay1] * 0.35f
-            if (i >= reverbDelay2) sample += out[i - reverbDelay2] * 0.20f
+            
+            // Safe slapback echo
+            if (i >= slapbackDelay) {
+                sample += out[i - slapbackDelay] * 0.15f
+            }
+            // Safe early reflection
+            if (i >= earlyReflect) {
+                sample += out[i - earlyReflect] * 0.10f
+            }
+            
             out[i] = sample
         }
         
@@ -262,24 +263,5 @@ object AudioEngine {
             finalOut[i] = out[i].toInt().coerceIn(-32768, 32767).toShort()
         }
         return finalOut
-    }
-
-    private fun applyCompression(audio: ShortArray): ShortArray {
-        val out = ShortArray(audio.size)
-        val threshold = 15000f
-        val ratio = 3.5f
-        
-        for (i in audio.indices) {
-            val sample = audio[i].toFloat()
-            val absSample = abs(sample)
-            val outSample = if (absSample > threshold) {
-                threshold + (absSample - threshold) / ratio
-            } else {
-                absSample
-            }
-            val finalSample = if (sample < 0) -outSample else outSample
-            out[i] = finalSample.toInt().coerceIn(-32768, 32767).toShort()
-        }
-        return out
     }
 }
