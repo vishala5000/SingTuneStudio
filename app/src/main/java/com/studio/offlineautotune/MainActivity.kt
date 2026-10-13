@@ -48,9 +48,9 @@ fun StudioApp() {
     
     var isRecording by remember { mutableStateOf(false) }
     var isProcessing by remember { mutableStateOf(false) }
-    var statusText by remember { mutableStateOf("Tap to Record") }
+    var statusText by remember { mutableStateOf("Tap to Record your Song") }
     var recordedAudio by remember { mutableStateOf<ShortArray?>(null) }
-    var detectedKey by remember { mutableStateOf("A") }
+    var detectedKeyText by remember { mutableStateOf("Key: --") }
     
     val isRecordingAtomic = remember { AtomicBoolean(false) }
 
@@ -60,14 +60,17 @@ fun StudioApp() {
         if (isGranted) {
             isRecording = true
             isRecordingAtomic.set(true)
-            statusText = "Recording... Tap to Stop"
-            runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio, done, key ->
+            statusText = "Singing... Tap to Stop"
+            runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio, done, keyFreq ->
                 isProcessing = processing
                 statusText = status
                 if (audio != null) recordedAudio = audio
                 if (done) {
                     isRecording = false
-                    detectedKey = key
+                    val noteNames = listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+                    val midiNote = (12.0 * kotlin.math.log2(keyFreq.toDouble() / 440.0) + 69.0).toInt()
+                    val noteIndex = ((midiNote % 12) + 12) % 12
+                    detectedKeyText = "Detected Key: ${noteNames[noteIndex]} Major"
                 }
             }
         } else {
@@ -81,8 +84,8 @@ fun StudioApp() {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Text("SingTune Studio", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.White)
-            Text("Auto-Tune • Reverb • Echo • Beat", fontSize = 14.sp, color = Color.Gray)
+            Text("Advanced Auto-Tune", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Text("with Dynamic Guitar Matching", fontSize = 16.sp, color = Color.Gray)
             Spacer(modifier = Modifier.height(60.dp))
 
             Box(
@@ -102,14 +105,17 @@ fun StudioApp() {
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
                                 isRecording = true
                                 isRecordingAtomic.set(true)
-                                statusText = "Recording... Tap to Stop"
-                                runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio, done, key ->
+                                statusText = "Singing... Tap to Stop"
+                                runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio, done, keyFreq ->
                                     isProcessing = processing
                                     statusText = status
                                     if (audio != null) recordedAudio = audio
                                     if (done) {
                                         isRecording = false
-                                        detectedKey = key
+                                        val noteNames = listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+                                        val midiNote = (12.0 * kotlin.math.log2(keyFreq.toDouble() / 440.0) + 69.0).toInt()
+                                        val noteIndex = ((midiNote % 12) + 12) % 12
+                                        detectedKeyText = "Detected Key: ${noteNames[noteIndex]} Major"
                                     }
                                 }
                             } else {
@@ -138,11 +144,11 @@ fun StudioApp() {
                     color = Color(0xFF03DAC5).copy(alpha = 0.2f)
                 ) {
                     Text(
-                        "Key: $detectedKey • BPM: 120",
+                        detectedKeyText,
                         color = Color(0xFF03DAC5),
-                        fontSize = 14.sp,
+                        fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
                     )
                 }
             }
@@ -154,7 +160,7 @@ fun StudioApp() {
                     onClick = { playAudio(recordedAudio!!) }, 
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF03DAC5))
                 ) {
-                    Text("Play Final Mix", color = Color.Black)
+                    Text("Play Final Master", color = Color.Black, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -165,7 +171,7 @@ private fun runRecordingProcess(
     scope: kotlinx.coroutines.CoroutineScope,
     isRecordingAtomic: AtomicBoolean,
     context: android.content.Context,
-    onResult: (isProcessing: Boolean, status: String, audio: ShortArray?, done: Boolean, key: String) -> Unit
+    onResult: (isProcessing: Boolean, status: String, audio: ShortArray?, done: Boolean, keyFreq: Float) -> Unit
 ) {
     scope.launch(Dispatchers.IO) {
         val audioRecord = AudioEngine.createAudioRecord()
@@ -184,31 +190,29 @@ private fun runRecordingProcess(
 
         if (rawAudio.isEmpty()) {
             withContext(Dispatchers.Main) { 
-                onResult(false, "Recording empty. Try again.", null, true, "A") 
+                onResult(false, "Recording empty. Try again.", null, true, 261.63f) 
             }
             return@launch
         }
 
         withContext(Dispatchers.Main) { 
-            onResult(true, "Processing...", null, false, "A") 
+            onResult(true, "Applying Auto-Tune & Generating Guitar...", null, false, 261.63f) 
         }
 
-        val (key, _) = AudioEngine.detectKeyAndBPM(rawAudio)
+        // Detect key for UI display
+        val detectedKey = AudioEngine.detectRootKey(rawAudio)
 
-        val beat = withContext(Dispatchers.Default) { 
-            AudioEngine.generateProceduralBeat(context, rawAudio.size / AudioEngine.SAMPLE_RATE.toFloat(), rawAudio) 
-        }
-        
+        // Process everything
         val finalMix = withContext(Dispatchers.Default) { 
-            AudioEngine.processVocalAndMix(rawAudio, beat) 
+            AudioEngine.processAndMix(rawAudio) 
         }
         
-        val fileName = "SingTune_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}"
+        val fileName = "AutoTune_Guitar_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}"
         FileSaver.saveAsWav(context, finalMix, fileName)
 
         withContext(Dispatchers.Main) { 
-            onResult(false, "Saved! Key: $key", finalMix, true, key)
-            Toast.makeText(context, "Song saved!", Toast.LENGTH_SHORT).show()
+            onResult(false, "Saved to Music Folder!", finalMix, true, detectedKey)
+            Toast.makeText(context, "Master saved!", Toast.LENGTH_SHORT).show()
         }
     }
 }
