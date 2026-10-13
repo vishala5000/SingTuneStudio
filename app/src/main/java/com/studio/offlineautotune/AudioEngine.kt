@@ -300,17 +300,22 @@ object AudioEngine {
         return out
     }
 
+    // FIXED: Replaced error-prone Pair/Triple list with explicit, ultra-fast variables
     private fun applyAdvancedReverb(audio: ShortArray): ShortArray {
         val out = FloatArray(audio.size)
         val echoDelay = (SAMPLE_RATE * 0.3f).toInt()
         
-        val taps = listOf(
-            Triple((SAMPLE_RATE * 0.023f).toInt(), 0.25f),
-            Triple((SAMPLE_RATE * 0.037f).toInt(), 0.20f),
-            Triple((SAMPLE_RATE * 0.059f).toInt(), 0.15f),
-            Triple((SAMPLE_RATE * 0.089f).toInt(), 0.12f),
-            Triple((SAMPLE_RATE * 0.131f).toInt(), 0.10f)
-        )
+        // Explicit delay and gain variables (no type inference issues)
+        val delay1 = (SAMPLE_RATE * 0.023f).toInt()
+        val gain1 = 0.25f
+        val delay2 = (SAMPLE_RATE * 0.037f).toInt()
+        val gain2 = 0.20f
+        val delay3 = (SAMPLE_RATE * 0.059f).toInt()
+        val gain3 = 0.15f
+        val delay4 = (SAMPLE_RATE * 0.089f).toInt()
+        val gain4 = 0.12f
+        val delay5 = (SAMPLE_RATE * 0.131f).toInt()
+        val gain5 = 0.10f
         
         for (i in audio.indices) {
             val dry = audio[i].toFloat()
@@ -321,17 +326,19 @@ object AudioEngine {
                 echoWet = out[i - echoDelay] * 0.35f
             }
             
-            for ((delay, gain) in taps) {
-                if (i >= delay) {
-                    reverbWet += audio[i - delay].toFloat() * gain
-                }
-            }
+            if (i >= delay1) reverbWet += audio[i - delay1].toFloat() * gain1
+            if (i >= delay2) reverbWet += audio[i - delay2].toFloat() * gain2
+            if (i >= delay3) reverbWet += audio[i - delay3].toFloat() * gain3
+            if (i >= delay4) reverbWet += audio[i - delay4].toFloat() * gain4
+            if (i >= delay5) reverbWet += audio[i - delay5].toFloat() * gain5
             
             out[i] = (dry * 0.65f) + echoWet + reverbWet
         }
         
         val finalOut = ShortArray(audio.size)
-        for (i in out.indices) finalOut[i] = out[i].toInt().coerceIn(-32768, 32767).toShort()
+        for (i in out.indices) {
+            finalOut[i] = out[i].toInt().coerceIn(-32768, 32767).toShort()
+        }
         return finalOut
     }
 
