@@ -9,35 +9,10 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.*
 
-// Effect Preset Configuration
-data class EffectPreset(
-    val name: String,
-    val reverbDecay: Float,      // 0.0 - 1.0
-    val echoDelay: Float,        // seconds
-    val echoFeedback: Float,     // 0.0 - 1.0
-    val stereoWidth: Float,      // 0.0 - 1.0
-    val compressionRatio: Float, // 2.0 - 10.0
-    val clarityBoost: Float      // 0.0 - 2.0
-)
-
 object AudioEngine {
     const val SAMPLE_RATE = 44100
     const val CHANNEL_IN = AudioFormat.CHANNEL_IN_MONO
     const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
-
-    // Professional Effect Presets
-    val PRESETS = mapOf(
-        "Pop" to EffectPreset("Pop", 0.6f, 0.25f, 0.3f, 0.4f, 4.0f, 1.5f),
-        "Rock" to EffectPreset("Rock", 0.4f, 0.3f, 0.25f, 0.3f, 6.0f, 1.8f),
-        "Ballad" to EffectPreset("Ballad", 0.8f, 0.4f, 0.4f, 0.6f, 3.0f, 1.2f),
-        "Ambient" to EffectPreset("Ambient", 0.9f, 0.5f, 0.5f, 0.8f, 2.5f, 1.0f)
-    )
-
-    private var currentPreset = PRESETS["Pop"]!!
-
-    fun setPreset(presetName: String) {
-        currentPreset = PRESETS[presetName] ?: PRESETS["Pop"]!!
-    }
 
     fun createAudioRecord(): AudioRecord {
         val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_IN, ENCODING)
@@ -46,7 +21,6 @@ object AudioEngine {
         )
     }
 
-    // Robust WAV loader
     private fun loadWavFromRaw(context: Context, resourceId: Int): ShortArray {
         val inputStream = context.resources.openRawResource(resourceId)
         val byteArrayOutputStream = ByteArrayOutputStream()
@@ -129,12 +103,10 @@ object AudioEngine {
         return beat
     }
 
-    // Advanced pitch detection with key display
     fun detectKeyAndBPM(audio: ShortArray): Pair<String, Int> {
         val detectedPitch = detectDominantPitch(audio)
         val key = pitchToNoteName(detectedPitch)
-        val bpm = 120 // Fixed BPM since loops are 120 BPM
-        return Pair(key, bpm)
+        return Pair(key, 120)
     }
 
     private fun detectDominantPitch(audio: ShortArray): Float {
@@ -176,7 +148,6 @@ object AudioEngine {
         return noteNames[noteIndex]
     }
 
-    // Advanced vocal processing with preset-based effects
     private fun autoTuneToAmScale(audio: ShortArray): ShortArray {
         val out = ShortArray(audio.size)
         val windowSize = 2048
@@ -266,13 +237,11 @@ object AudioEngine {
         return if (bestOffset > 0) SAMPLE_RATE.toFloat() / bestOffset.toFloat() else 0f
     }
 
-    // De-esser: Reduces harsh "S" sounds (5-9 kHz range)
     private fun deEss(audio: ShortArray): ShortArray {
         val out = ShortArray(audio.size)
         val threshold = 8000f
         val reduction = 0.5f
         
-        // Simple high-pass to detect sibilance
         var prev = 0.0f
         for (i in audio.indices) {
             val current = audio[i].toFloat()
@@ -304,22 +273,23 @@ object AudioEngine {
         return out
     }
 
-    private fun addClarity(audio: ShortArray, boost: Float): ShortArray {
+    private fun addClarity(audio: ShortArray): ShortArray {
         val out = ShortArray(audio.size)
         var prev = 0.0f
         for (i in audio.indices) {
             val current = audio[i].toFloat()
             val diff = current - prev
             prev = current
-            val boosted = current + (diff * boost)
+            val boosted = current + (diff * 1.5f)
             out[i] = boosted.toInt().coerceIn(-32768, 32767).toShort()
         }
         return out
     }
 
-    private fun applyCompression(audio: ShortArray, ratio: Float): ShortArray {
+    private fun applyCompression(audio: ShortArray): ShortArray {
         val out = ShortArray(audio.size)
         val threshold = 12000f
+        val ratio = 4.0f
         for (i in audio.indices) {
             val sample = audio[i].toFloat()
             val absSample = abs(sample)
@@ -330,19 +300,16 @@ object AudioEngine {
         return out
     }
 
-    // Advanced stereo reverb with preset-based decay
-    private fun applyAdvancedReverb(audio: ShortArray, preset: EffectPreset): ShortArray {
+    private fun applyAdvancedReverb(audio: ShortArray): ShortArray {
         val out = FloatArray(audio.size)
-        val echoDelay = (SAMPLE_RATE * preset.echoDelay).toInt()
-        val reverbDecay = preset.reverbDecay
+        val echoDelay = (SAMPLE_RATE * 0.3f).toInt()
         
-        // Multiple reverb taps for lush, professional sound
         val taps = listOf(
-            Triple((SAMPLE_RATE * 0.023f).toInt(), 0.4f * reverbDecay, 0.7f),
-            Triple((SAMPLE_RATE * 0.037f).toInt(), 0.3f * reverbDecay, 0.6f),
-            Triple((SAMPLE_RATE * 0.059f).toInt(), 0.25f * reverbDecay, 0.5f),
-            Triple((SAMPLE_RATE * 0.089f).toInt(), 0.2f * reverbDecay, 0.4f),
-            Triple((SAMPLE_RATE * 0.131f).toInt(), 0.15f * reverbDecay, 0.3f)
+            Triple((SAMPLE_RATE * 0.023f).toInt(), 0.25f),
+            Triple((SAMPLE_RATE * 0.037f).toInt(), 0.20f),
+            Triple((SAMPLE_RATE * 0.059f).toInt(), 0.15f),
+            Triple((SAMPLE_RATE * 0.089f).toInt(), 0.12f),
+            Triple((SAMPLE_RATE * 0.131f).toInt(), 0.10f)
         )
         
         for (i in audio.indices) {
@@ -350,19 +317,17 @@ object AudioEngine {
             var reverbWet = 0.0f
             var echoWet = 0.0f
             
-            // Echo
             if (i >= echoDelay) {
-                echoWet = out[i - echoDelay] * preset.echoFeedback
+                echoWet = out[i - echoDelay] * 0.35f
             }
             
-            // Multi-tap reverb
-            for ((delay, gain, _) in taps) {
+            for ((delay, gain) in taps) {
                 if (i >= delay) {
                     reverbWet += audio[i - delay].toFloat() * gain
                 }
             }
             
-            out[i] = (dry * 0.6f) + echoWet + reverbWet
+            out[i] = (dry * 0.65f) + echoWet + reverbWet
         }
         
         val finalOut = ShortArray(audio.size)
@@ -370,63 +335,22 @@ object AudioEngine {
         return finalOut
     }
 
-    // Stereo widening using Haas effect
-    private fun widenStereo(audio: ShortArray, width: Float): ShortArray {
-        val out = ShortArray(audio.size)
-        val delaySamples = (SAMPLE_RATE * 0.0003f * width).toInt() // 0.3ms max delay
-        
-        for (i in audio.indices) {
-            val current = audio[i].toFloat()
-            val delayed = if (i >= delaySamples) audio[i - delaySamples].toFloat() else current
-            
-            // Create stereo width by delaying one channel slightly
-            val widened = (current * 0.7f + delayed * 0.3f)
-            out[i] = widened.toInt().coerceIn(-32768, 32767).toShort()
-        }
-        return out
-    }
-
     fun processVocalAndMix(rawVocal: ShortArray, beat: ShortArray): ShortArray {
-        // Advanced vocal chain with preset-based processing
         val tuned = autoTuneToAmScale(rawVocal)
         val deessed = deEss(tuned)
         val clean = removeMud(deessed)
-        val clear = addClarity(clean, currentPreset.clarityBoost)
-        val compressed = applyCompression(clear, currentPreset.compressionRatio)
-        val reverbed = applyAdvancedReverb(compressed, currentPreset)
-        val widened = widenStereo(reverbed, currentPreset.stereoWidth)
+        val clear = addClarity(clean)
+        val compressed = applyCompression(clear)
+        val reverbed = applyAdvancedReverb(compressed)
         
-        val finalSize = maxOf(widened.size, beat.size)
+        val finalSize = maxOf(reverbed.size, beat.size)
         val finalMix = ShortArray(finalSize)
         for (i in 0 until finalSize) {
-            val vocalSample = if (i < widened.size) widened[i].toInt() else 0
+            val vocalSample = if (i < reverbed.size) reverbed[i].toInt() else 0
             val beatSample = if (i < beat.size) beat[i].toInt() else 0
             val mixed = ((vocalSample * 0.85f) + (beatSample * 0.45f)).toInt()
             finalMix[i] = mixed.coerceIn(-32768, 32767).toShort()
         }
         return finalMix
-    }
-
-    // Real-time waveform data for visualization
-    fun getWaveformData(audio: ShortArray, numPoints: Int): List<Float> {
-        if (audio.isEmpty()) return List(numPoints) { 0f }
-        
-        val points = mutableListOf<Float>()
-        val samplesPerPoint = audio.size / numPoints
-        
-        for (i in 0 until numPoints) {
-            val start = i * samplesPerPoint
-            val end = minOf(start + samplesPerPoint, audio.size)
-            var max = 0f
-            
-            for (j in start until end) {
-                val abs = abs(audio[j].toFloat())
-                if (abs > max) max = abs
-            }
-            
-            points.add(max / 32768f)
-        }
-        
-        return points
     }
 }
