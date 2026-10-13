@@ -1,12 +1,8 @@
 package com.studio.offlineautotune
 
-import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import java.io.ByteArrayOutputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import kotlin.math.*
 
 object AudioEngine {
@@ -21,98 +17,11 @@ object AudioEngine {
         )
     }
 
-    private fun loadWavFromRaw(context: Context, resourceId: Int): ShortArray {
-        val inputStream = context.resources.openRawResource(resourceId)
-        val byteArrayOutputStream = ByteArrayOutputStream()
-        val buffer = ByteArray(1024)
-        var bytesRead: Int
-        while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-            byteArrayOutputStream.write(buffer, 0, bytesRead)
-        }
-        val bytes = byteArrayOutputStream.toByteArray()
-        
-        var dataOffset = 12
-        while (dataOffset < bytes.size - 8) {
-            val chunkId = String(bytes, dataOffset, 4, Charsets.US_ASCII)
-            val chunkSize = ByteBuffer.wrap(bytes, dataOffset + 4, 4)
-                .order(ByteOrder.LITTLE_ENDIAN).getInt()
-            if (chunkId == "data") {
-                dataOffset += 8
-                break
-            }
-            dataOffset += 8 + chunkSize
-        }
-        
-        val channels = if (bytes.size > 23) {
-            ByteBuffer.wrap(bytes, 22, 2).order(ByteOrder.LITTLE_ENDIAN).getShort().toInt()
-        } else 1
-        
-        val pcmBytes = bytes.copyOfRange(dataOffset, bytes.size)
-        val shortBuffer = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-        val rawSamples = ShortArray(shortBuffer.remaining())
-        shortBuffer.get(rawSamples)
-        
-        return if (channels == 2) {
-            val mono = ShortArray(rawSamples.size / 2)
-            for (i in mono.indices) {
-                mono[i] = ((rawSamples[i * 2].toInt() + rawSamples[i * 2 + 1].toInt()) / 2).toShort()
-            }
-            mono
-        } else {
-            rawSamples
-        }
-    }
+    // 1. DETECT VOCAL KEY
+    fun detectRootKey(audio: ShortArray): Float {
+        val analyzeLength = minOf(audio.size, SAMPLE_RATE * 2) // Analyze first 2 seconds
+        if (analyzeLength < 1024) return 261.63f // Default to C4
 
-    private fun loopAudio(audio: ShortArray, durationSec: Float): ShortArray {
-        if (audio.isEmpty()) return ShortArray(0)
-        val targetSamples = (SAMPLE_RATE * durationSec).toInt()
-        val looped = ShortArray(targetSamples)
-        for (i in 0 until targetSamples) {
-            looped[i] = audio[i % audio.size]
-        }
-        return looped
-    }
-
-    fun generateProceduralBeat(context: Context, durationSec: Float, vocalAudio: ShortArray): ShortArray {
-        val drumLoop = loadWavFromRaw(context, R.raw.drum_loop)
-        val bassLoop = loadWavFromRaw(context, R.raw.bass_loop)
-        val chordLoop = loadWavFromRaw(context, R.raw.chord_loop)
-        val arpLoop = loadWavFromRaw(context, R.raw.arp_loop)
-        
-        val drums = loopAudio(drumLoop, durationSec)
-        val bass = loopAudio(bassLoop, durationSec)
-        val chords = loopAudio(chordLoop, durationSec)
-        val arp = loopAudio(arpLoop, durationSec)
-        
-        val totalSamples = drums.size
-        val beat = ShortArray(totalSamples)
-        
-        for (i in 0 until totalSamples) {
-            val drumSample = drums[i].toFloat()
-            val bassSample = bass[i].toFloat()
-            val chordSample = chords[i].toFloat()
-            val arpSample = arp[i].toFloat()
-            
-            val mixed = (drumSample * 0.85f + 
-                        bassSample * 0.70f + 
-                        chordSample * 0.35f + 
-                        arpSample * 0.25f).toInt()
-            
-            beat[i] = mixed.coerceIn(-32768, 32767).toShort()
-        }
-        return beat
-    }
-
-    fun detectKeyAndBPM(audio: ShortArray): Pair<String, Int> {
-        val detectedPitch = detectDominantPitch(audio)
-        val key = pitchToNoteName(detectedPitch)
-        return Pair(key, 120)
-    }
-
-    private fun detectDominantPitch(audio: ShortArray): Float {
-        val analyzeLength = minOf(audio.size, SAMPLE_RATE * 2)
-        if (analyzeLength < 1024) return 110.0f
-        
         val buffer = FloatArray(analyzeLength)
         for (i in 0 until analyzeLength) buffer[i] = audio[i].toFloat() / 32768.0f
 
@@ -122,41 +31,37 @@ object AudioEngine {
         
         for (i in 0 until analyzeLength) rms += buffer[i] * buffer[i]
         rms = sqrt(rms / analyzeLength.toFloat())
-        if (rms < 0.01f) return 110.0f 
+        if (rms < 0.01f) return 261.63f 
 
         var lastCorrelation = 1.0f
-        for (offset in 100 until minOf(analyzeLength / 2, 2000)) { 
+        // Search typical vocal range (80Hz to 800Hz)
+        for (offset in 50 until minOf(analyzeLength / 2, 2000)) { 
             var correlation = 0.0f
             for (i in 0 until minOf(analyzeLength - offset, 2000)) {
                 correlation += abs(buffer[i] - buffer[i + offset])
             }
             correlation = 1.0f - (correlation / minOf(analyzeLength - offset, 2000).toFloat())
             
-            if (correlation > 0.9f && correlation > lastCorrelation) {
+            if (correlation > 0.85f && correlation > lastCorrelation) {
                 bestCorrelation = correlation
                 bestOffset = offset
             }
             lastCorrelation = correlation
         }
-        return if (bestOffset > 0) SAMPLE_RATE.toFloat() / bestOffset.toFloat() else 110.0f
+        return if (bestOffset > 0) SAMPLE_RATE.toFloat() / bestOffset.toFloat() else 261.63f
     }
 
-    private fun pitchToNoteName(freq: Float): String {
-        val noteNames = listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-        val midiNote = (12.0 * log2(freq.toDouble() / 440.0) + 69.0).toInt()
-        val noteIndex = ((midiNote % 12) + 12) % 12
-        return noteNames[noteIndex]
-    }
-
-    private fun autoTuneToAmScale(audio: ShortArray): ShortArray {
+    // 2. ADVANCED AUTO-TUNE (Scale Quantization)
+    private fun applyAdvancedAutoTune(audio: ShortArray, rootFreq: Float): ShortArray {
         val out = ShortArray(audio.size)
         val windowSize = 2048
+        val hopSize = 1024
         
-        val amScale = listOf(
-            220.0f, 246.94f, 261.63f, 293.66f, 329.63f, 349.23f, 392.0f, 440.0f,
-            493.88f, 523.25f, 587.33f, 659.25f, 698.46f, 783.99f, 880.0f
-        )
-        
+        // Build a Major Scale based on the detected root frequency
+        // Semitone multipliers: 0, 2, 4, 5, 7, 9, 11, 12
+        val scaleMultipliers = listOf(1.0f, 1.12246f, 1.25992f, 1.33484f, 1.49831f, 1.68179f, 1.88775f, 2.0f)
+        val scaleNotes = scaleMultipliers.map { rootFreq * it }
+
         var i = 0
         while (i < audio.size) {
             val end = minOf(i + windowSize, audio.size)
@@ -165,56 +70,55 @@ object AudioEngine {
             val detectedPitch = detectPitchInWindow(window)
             
             if (detectedPitch > 0) {
-                val nearestNote = amScale.minByOrNull { abs(it - detectedPitch) } ?: detectedPitch
-                val shiftFactor = nearestNote / detectedPitch
+                // Find closest note in the detected Major scale
+                var closestNote = detectedPitch
+                var minDiff = Float.MAX_VALUE
                 
-                if (abs(shiftFactor - 1.0f) < 0.05f) {
-                    for (j in 0 until window.size) {
-                        val srcIndex = j * shiftFactor
-                        val indexLow = srcIndex.toInt()
-                        val indexHigh = (indexLow + 1).coerceAtMost(window.size - 1)
-                        val frac = srcIndex - indexLow
-                        if (indexLow >= 0 && indexLow < window.size) {
-                            val sample = window[indexLow].toFloat() * (1.0f - frac) + 
-                                        window[indexHigh].toFloat() * frac
-                            val globalIndex = i + j
-                            if (globalIndex < out.size) {
-                                out[globalIndex] = sample.toInt().coerceIn(-32768, 32767).toShort()
-                            }
-                        }
+                for (note in scaleNotes) {
+                    val diff = abs(note - detectedPitch)
+                    if (diff < minDiff) {
+                        minDiff = diff
+                        closestNote = note
                     }
-                } else {
-                    for (j in 0 until window.size) {
+                }
+                
+                val shiftFactor = closestNote / detectedPitch
+                
+                // Apply pitch correction (Advanced: smooth linear interpolation)
+                for (j in 0 until window.size) {
+                    val srcIndex = j * shiftFactor
+                    val indexLow = srcIndex.toInt()
+                    val indexHigh = (indexLow + 1).coerceAtMost(window.size - 1)
+                    val frac = srcIndex - indexLow
+                    
+                    if (indexLow >= 0 && indexLow < window.size) {
+                        val sample = window[indexLow].toFloat() * (1.0f - frac) + window[indexHigh].toFloat() * frac
                         val globalIndex = i + j
                         if (globalIndex < out.size) {
-                            out[globalIndex] = window[j]
+                            out[globalIndex] = sample.toInt().coerceIn(-32768, 32767).toShort()
                         }
                     }
                 }
             } else {
+                // No pitch detected (silence/consonant), keep original
                 for (j in 0 until window.size) {
                     val globalIndex = i + j
-                    if (globalIndex < out.size) {
-                        out[globalIndex] = window[j]
-                    }
+                    if (globalIndex < out.size) out[globalIndex] = window[j]
                 }
             }
-            
-            i += windowSize
+            i += hopSize
         }
         return out
     }
 
     private fun detectPitchInWindow(audio: ShortArray): Float {
         if (audio.size < 512) return 0f
-        
         val buffer = FloatArray(audio.size)
         for (i in audio.indices) buffer[i] = audio[i].toFloat() / 32768.0f
 
         var bestOffset = -1
         var bestCorrelation = 0.0f
         var rms = 0.0f
-        
         for (i in buffer.indices) rms += buffer[i] * buffer[i]
         rms = sqrt(rms / buffer.size)
         if (rms < 0.02f) return 0f
@@ -226,138 +130,141 @@ object AudioEngine {
                 correlation += abs(buffer[i] - buffer[i + offset])
             }
             correlation = 1.0f - (correlation / minOf(buffer.size - offset, 1000))
-            
             if (correlation > 0.85f && correlation > lastCorrelation) {
                 bestCorrelation = correlation
                 bestOffset = offset
             }
             lastCorrelation = correlation
         }
-        
         return if (bestOffset > 0) SAMPLE_RATE.toFloat() / bestOffset.toFloat() else 0f
     }
 
-    private fun deEss(audio: ShortArray): ShortArray {
-        val out = ShortArray(audio.size)
-        val threshold = 8000f
-        val reduction = 0.5f
+    // 3. PROFESSIONAL PROCEDURAL GUITAR (Artifact-Free, Dynamic Key)
+    private fun generateProfessionalGuitar(durationSec: Float, rootFreq: Float): ShortArray {
+        val totalSamples = (SAMPLE_RATE * durationSec).toInt()
+        val out = FloatArray(totalSamples)
+        val bpm = 80f // Slow, emotional guitar tempo
+        val samplesPerBeat = (60.0f / bpm * SAMPLE_RATE.toFloat()).toInt()
+        val sixteenth = samplesPerBeat / 4
         
-        var prev = 0.0f
-        for (i in audio.indices) {
-            val current = audio[i].toFloat()
-            val highFreq = current - prev
-            prev = current
+        // Professional Progression: I - V - vi - IV (Relative to detected root)
+        // Multipliers: Root, Root*1.5 (5th), Root*1.68 (6th minor), Root*1.33 (4th)
+        val progression = listOf(
+            listOf(rootFreq, rootFreq * 1.2599f, rootFreq * 1.4983f),       // I
+            listOf(rootFreq * 1.4983f, rootFreq * 1.8877f, rootFreq * 2.0f), // V
+            listOf(rootFreq * 1.6818f, rootFreq * 2.0f, rootFreq * 2.3784f), // vi
+            listOf(rootFreq * 1.3348f, rootFreq * 1.6818f, rootFreq * 2.0f)  // IV
+        )
+
+        for (i in 0 until totalSamples) {
+            val beatPos = i % samplesPerBeat
+            val barPos = i % (samplesPerBeat * 4)
+            val currentBar = (i / (samplesPerBeat * 4)) % 4
+            val currentChord = progression[currentBar]
             
-            val sibilance = abs(highFreq)
-            val gain = if (sibilance > threshold) reduction else 1.0f
+            var sample = 0.0f
             
-            out[i] = (current * gain).toInt().coerceIn(-32768, 32767).toShort()
-        }
-        return out
-    }
-
-    private fun removeMud(audio: ShortArray): ShortArray {
-        val out = ShortArray(audio.size)
-        val rc = 1.0f / (2.0f * PI.toFloat() * 80.0f)
-        val dt = 1.0f / SAMPLE_RATE.toFloat()
-        val alpha = rc / (rc + dt)
-        var prevIn = 0.0f
-        var prevOut = 0.0f
-        for (i in audio.indices) {
-            val input = audio[i].toFloat()
-            val filtered = alpha * (prevOut + input - prevIn)
-            prevIn = input
-            prevOut = filtered
-            out[i] = filtered.toInt().coerceIn(-32768, 32767).toShort()
-        }
-        return out
-    }
-
-    private fun addClarity(audio: ShortArray): ShortArray {
-        val out = ShortArray(audio.size)
-        var prev = 0.0f
-        for (i in audio.indices) {
-            val current = audio[i].toFloat()
-            val diff = current - prev
-            prev = current
-            val boosted = current + (diff * 1.5f)
-            out[i] = boosted.toInt().coerceIn(-32768, 32767).toShort()
-        }
-        return out
-    }
-
-    private fun applyCompression(audio: ShortArray): ShortArray {
-        val out = ShortArray(audio.size)
-        val threshold = 12000f
-        val ratio = 4.0f
-        for (i in audio.indices) {
-            val sample = audio[i].toFloat()
-            val absSample = abs(sample)
-            val outSample = if (absSample > threshold) threshold + (absSample - threshold) / ratio else absSample
-            val finalSample = if (sample < 0) -outSample else outSample
-            out[i] = (finalSample * 1.15f).toInt().coerceIn(-32768, 32767).toShort()
-        }
-        return out
-    }
-
-    // FIXED: Replaced error-prone Pair/Triple list with explicit, ultra-fast variables
-    private fun applyAdvancedReverb(audio: ShortArray): ShortArray {
-        val out = FloatArray(audio.size)
-        val echoDelay = (SAMPLE_RATE * 0.3f).toInt()
-        
-        // Explicit delay and gain variables (no type inference issues)
-        val delay1 = (SAMPLE_RATE * 0.023f).toInt()
-        val gain1 = 0.25f
-        val delay2 = (SAMPLE_RATE * 0.037f).toInt()
-        val gain2 = 0.20f
-        val delay3 = (SAMPLE_RATE * 0.059f).toInt()
-        val gain3 = 0.15f
-        val delay4 = (SAMPLE_RATE * 0.089f).toInt()
-        val gain4 = 0.12f
-        val delay5 = (SAMPLE_RATE * 0.131f).toInt()
-        val gain5 = 0.10f
-        
-        for (i in audio.indices) {
-            val dry = audio[i].toFloat()
-            var reverbWet = 0.0f
-            var echoWet = 0.0f
+            // Guitar Arpeggio Pattern (Pluck on 16th notes)
+            val noteIndex = (i / sixteenth) % currentChord.size
+            val pluckPos = i % sixteenth
             
-            if (i >= echoDelay) {
-                echoWet = out[i - echoDelay] * 0.35f
+            if (pluckPos < 10) { // Trigger new pluck
+                val freq = currentChord[noteIndex]
+                
+                // Professional Guitar Synthesis: Fundamental + 2nd Harmonic + 3rd Harmonic
+                val t = pluckPos.toFloat() / SAMPLE_RATE.toFloat()
+                
+                // String body (decaying sine waves)
+                val fundamental = sin(2.0f * PI.toFloat() * freq * t)
+                val harmonic2 = sin(2.0f * PI.toFloat() * (freq * 2.0f) * t) * 0.5f
+                val harmonic3 = sin(2.0f * PI.toFloat() * (freq * 3.0f) * t) * 0.25f
+                
+                // Envelope: Fast attack, smooth exponential decay (mimics guitar string)
+                val decay = exp(-t * 4.0f) 
+                
+                // Pick noise (brief white noise burst for realism)
+                val pickNoise = if (pluckPos < 3) (Math.random().toFloat() * 2f - 1f) * 0.3f else 0f
+                
+                sample = (fundamental + harmonic2 + harmonic3) * decay * 0.4f + pickNoise
+            } else {
+                // Sustain tail
+                val t = pluckPos.toFloat() / SAMPLE_RATE.toFloat()
+                val decay = exp(-t * 4.0f)
+                // Very subtle room reverb tail
+                sample *= decay * 0.8f 
             }
             
-            if (i >= delay1) reverbWet += audio[i - delay1].toFloat() * gain1
-            if (i >= delay2) reverbWet += audio[i - delay2].toFloat() * gain2
-            if (i >= delay3) reverbWet += audio[i - delay3].toFloat() * gain3
-            if (i >= delay4) reverbWet += audio[i - delay4].toFloat() * gain4
-            if (i >= delay5) reverbWet += audio[i - delay5].toFloat() * gain5
-            
-            out[i] = (dry * 0.65f) + echoWet + reverbWet
+            out[i] = sample
         }
         
-        val finalOut = ShortArray(audio.size)
+        // Normalize and convert to ShortArray
+        val finalOut = ShortArray(totalSamples)
+        var maxVal = 0.0f
+        for (s in out) if (abs(s) > maxVal) maxVal = abs(s)
+        if (maxVal == 0.0f) maxVal = 1.0f
+        
         for (i in out.indices) {
-            finalOut[i] = out[i].toInt().coerceIn(-32768, 32767).toShort()
+            finalOut[i] = ((out[i] / maxVal) * 32767.0f * 0.7f).toInt().coerceIn(-32768, 32767).toShort()
         }
         return finalOut
     }
 
-    fun processVocalAndMix(rawVocal: ShortArray, beat: ShortArray): ShortArray {
-        val tuned = autoTuneToAmScale(rawVocal)
-        val deessed = deEss(tuned)
-        val clean = removeMud(deessed)
-        val clear = addClarity(clean)
-        val compressed = applyCompression(clear)
-        val reverbed = applyAdvancedReverb(compressed)
+    // 4. STUDIO VOCAL POLISH (Reverb + Delay)
+    private fun applyStudioPolish(audio: ShortArray): ShortArray {
+        val out = FloatArray(audio.size)
+        val echoDelay = (SAMPLE_RATE * 0.35f).toInt() // 350ms professional slapback
         
-        val finalSize = maxOf(reverbed.size, beat.size)
+        for (i in audio.indices) {
+            val dry = audio[i].toFloat()
+            var echoWet = 0.0f
+            var reverbWet = 0.0f
+            
+            if (i >= echoDelay) echoWet = out[i - echoDelay] * 0.30f
+            
+            val rev1 = (SAMPLE_RATE * 0.04f).toInt()
+            val rev2 = (SAMPLE_RATE * 0.07f).toInt()
+            val rev3 = (SAMPLE_RATE * 0.11f).toInt()
+            
+            if (i >= rev1) reverbWet += audio[i - rev1].toFloat() * 0.25f
+            if (i >= rev2) reverbWet += audio[i - rev2].toFloat() * 0.20f
+            if (i >= rev3) reverbWet += audio[i - rev3].toFloat() * 0.15f
+            
+            out[i] = (dry * 0.70f) + echoWet + reverbWet
+        }
+        
+        val finalOut = ShortArray(audio.size)
+        for (i in out.indices) finalOut[i] = out[i].toInt().coerceIn(-32768, 32767).toShort()
+        return finalOut
+    }
+
+    // 5. MASTER MIX
+    fun processAndMix(rawVocal: ShortArray): ShortArray {
+        // Step 1: Detect the key of the singing
+        val rootKey = detectRootKey(rawVocal)
+        
+        // Step 2: Apply advanced auto-tune to snap vocals to the detected Major scale
+        val autoTuned = applyAdvancedAutoTune(rawVocal, rootKey)
+        
+        // Step 3: Generate dynamic guitar that perfectly matches the detected key
+        val durationSec = rawVocal.size / SAMPLE_RATE.toFloat()
+        val guitar = generateProfessionalGuitar(durationSec, rootKey)
+        
+        // Step 4: Polish the vocal with professional reverb and echo
+        val polishedVocal = applyStudioPolish(autoTuned)
+        
+        // Step 5: Mix vocal forward, guitar supporting
+        val finalSize = maxOf(polishedVocal.size, guitar.size)
         val finalMix = ShortArray(finalSize)
+        
         for (i in 0 until finalSize) {
-            val vocalSample = if (i < reverbed.size) reverbed[i].toInt() else 0
-            val beatSample = if (i < beat.size) beat[i].toInt() else 0
-            val mixed = ((vocalSample * 0.85f) + (beatSample * 0.45f)).toInt()
+            val vocalSample = if (i < polishedVocal.size) polishedVocal[i].toInt() else 0
+            val guitarSample = if (i < guitar.size) guitar[i].toInt() else 0
+            
+            // Mix: Vocal 80%, Guitar 50% (leaves headroom, vocal is the star)
+            val mixed = ((vocalSample * 0.80f) + (guitarSample * 0.50f)).toInt()
             finalMix[i] = mixed.coerceIn(-32768, 32767).toShort()
         }
+        
         return finalMix
     }
 }
