@@ -21,8 +21,8 @@ object AudioEngine {
         )
     }
 
-    // Load WAV file from raw resources (skips 44-byte WAV header)
-    private fun loadAudioFromRaw(context: Context, resourceId: Int): ShortArray {
+    // Robust WAV loader: handles mono/stereo, skips header properly
+    private fun loadWavFromRaw(context: Context, resourceId: Int): ShortArray {
         val inputStream = context.resources.openRawResource(resourceId)
         val byteArrayOutputStream = ByteArrayOutputStream()
         val buffer = ByteArray(1024)
@@ -31,31 +31,46 @@ object AudioEngine {
             byteArrayOutputStream.write(buffer, 0, bytesRead)
         }
         val bytes = byteArrayOutputStream.toByteArray()
-        val pcmBytes = bytes.copyOfRange(44, bytes.size)
-        val shortBuffer = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-        val audioData = ShortArray(shortBuffer.remaining())
-        shortBuffer.get(audioData)
-        return audioData
-    }
-
-    // High-quality pitch shift using linear interpolation
-    private fun pitchShiftAudio(audio: ShortArray, factor: Float): ShortArray {
-        val out = ShortArray(audio.size)
-        for (i in out.indices) {
-            val srcIndex = i * factor
-            val indexLow = srcIndex.toInt()
-            val indexHigh = (indexLow + 1).coerceAtMost(audio.size - 1)
-            val frac = srcIndex - indexLow
-            if (indexLow >= 0 && indexLow < audio.size) {
-                val sample = audio[indexLow].toFloat() * (1.0f - frac) + audio[indexHigh].toFloat() * frac
-                out[i] = sample.toInt().coerceIn(-32768, 32767).toShort()
+        
+        // Parse WAV header to find data chunk
+        var dataOffset = 12
+        while (dataOffset < bytes.size - 8) {
+            val chunkId = String(bytes, dataOffset, 4, Charsets.US_ASCII)
+            val chunkSize = ByteBuffer.wrap(bytes, dataOffset + 4, 4)
+                .order(ByteOrder.LITTLE_ENDIAN).getInt()
+            if (chunkId == "data") {
+                dataOffset += 8
+                break
             }
+            dataOffset += 8 + chunkSize
         }
-        return out
+        
+        // Read number of channels from header (bytes 22-23)
+        val channels = if (bytes.size > 23) {
+            ByteBuffer.wrap(bytes, 22, 2).order(ByteOrder.LITTLE_ENDIAN).getShort().toInt()
+        } else 1
+        
+        // Extract PCM data
+        val pcmBytes = bytes.copyOfRange(dataOffset, bytes.size)
+        val shortBuffer = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+        val rawSamples = ShortArray(shortBuffer.remaining())
+        shortBuffer.get(rawSamples)
+        
+        // If stereo, convert to mono by averaging channels
+        return if (channels == 2) {
+            val mono = ShortArray(rawSamples.size / 2)
+            for (i in mono.indices) {
+                mono[i] = ((rawSamples[i * 2].toInt() + rawSamples[i * 2 + 1].toInt()) / 2).toShort()
+            }
+            mono
+        } else {
+            rawSamples
+        }
     }
 
     // Loop audio seamlessly to match vocal duration
     private fun loopAudio(audio: ShortArray, durationSec: Float): ShortArray {
+        if (audio.isEmpty()) return ShortArray(0)
         val targetSamples = (SAMPLE_RATE * durationSec).toInt()
         val looped = ShortArray(targetSamples)
         for (i in 0 until targetSamples) {
@@ -64,61 +79,13 @@ object AudioEngine {
         return looped
     }
 
-    // Detect the dominant pitch (key) of the vocal
-    private fun detectDominantPitch(audio: ShortArray): Float {
-        val analyzeLength = minOf(audio.size, SAMPLE_RATE * 2)
-        if (analyzeLength < 1024) return 110.0f
-        
-        val buffer = FloatArray(analyzeLength)
-        for (i in 0 until analyzeLength) buffer[i] = audio[i].toFloat() / 32768.0f
-
-        var bestOffset = -1
-        var bestCorrelation = 0.0f
-        var rms = 0.0f
-        
-        for (i in 0 until analyzeLength) rms += buffer[i] * buffer[i]
-        rms = sqrt(rms / analyzeLength.toFloat())
-        if (rms < 0.01f) return 110.0f 
-
-        var lastCorrelation = 1.0f
-        for (offset in 100 until minOf(analyzeLength / 2, 2000)) { 
-            var correlation = 0.0f
-            for (i in 0 until minOf(analyzeLength - offset, 2000)) {
-                correlation += abs(buffer[i] - buffer[i + offset])
-            }
-            correlation = 1.0f - (correlation / minOf(analyzeLength - offset, 2000).toFloat())
-            
-            if (correlation > 0.9f && correlation > lastCorrelation) {
-                bestCorrelation = correlation
-                bestOffset = offset
-            }
-            lastCorrelation = correlation
-        }
-        return if (bestOffset > 0) SAMPLE_RATE.toFloat() / bestOffset.toFloat() else 110.0f
-    }
-
-    // Snap to nearest musical semitone
-    private fun snapToNearestNote(freq: Float): Float {
-        val midiNote = (12.0 * log2(freq.toDouble() / 440.0) + 69.0).toFloat()
-        val roundedNote = round(midiNote)
-        return (440.0 * 2.0.pow((roundedNote - 69.0) / 12.0)).toFloat()
-    }
-
-    // Generate beat using REAL audio loops, DYNAMICALLY pitch-shifted to match vocal key
+    // Generate beat using REAL audio loops at ORIGINAL quality (NO pitch shifting)
     fun generateProceduralBeat(context: Context, durationSec: Float, vocalAudio: ShortArray): ShortArray {
-        // Detect user's singing key
-        val detectedPitch = detectDominantPitch(vocalAudio)
-        val targetFreq = snapToNearestNote(detectedPitch)
-        
-        // Assume the loops are in A minor (A = 110Hz) — common for free loops
-        // Calculate the pitch shift factor to match user's voice
-        val shiftFactor = targetFreq / 110.0f
-        
-        // Load and DYNAMICALLY pitch-shift each loop to match the vocal key
-        val drumLoop = pitchShiftAudio(loadAudioFromRaw(context, R.raw.drum_loop), shiftFactor)
-        val bassLoop = pitchShiftAudio(loadAudioFromRaw(context, R.raw.bass_loop), shiftFactor)
-        val chordLoop = pitchShiftAudio(loadAudioFromRaw(context, R.raw.chord_loop), shiftFactor)
-        val arpLoop = pitchShiftAudio(loadAudioFromRaw(context, R.raw.arp_loop), shiftFactor)
+        // Load loops at their original, professional quality
+        val drumLoop = loadWavFromRaw(context, R.raw.drum_loop)
+        val bassLoop = loadWavFromRaw(context, R.raw.bass_loop)
+        val chordLoop = loadWavFromRaw(context, R.raw.chord_loop)
+        val arpLoop = loadWavFromRaw(context, R.raw.arp_loop)
         
         // Loop to match vocal duration
         val drums = loopAudio(drumLoop, durationSec)
@@ -135,18 +102,18 @@ object AudioEngine {
             val chordSample = chords[i].toFloat()
             val arpSample = arp[i].toFloat()
             
-            // Professional mix levels
-            val mixed = (drumSample * 0.9f + 
-                        bassSample * 0.7f + 
-                        chordSample * 0.4f + 
-                        arpSample * 0.3f).toInt()
+            // Professional mix: drums drive the track, arp is subtle
+            val mixed = (drumSample * 0.85f + 
+                        bassSample * 0.70f + 
+                        chordSample * 0.35f + 
+                        arpSample * 0.25f).toInt()
             
             beat[i] = mixed.coerceIn(-32768, 32767).toShort()
         }
         return beat
     }
 
-    // --- VOCAL PROCESSING (Crystal Clear Chain) ---
+    // --- CRYSTAL CLEAR VOCAL CHAIN ---
     private fun removeMud(audio: ShortArray): ShortArray {
         val out = ShortArray(audio.size)
         val rc = 1.0f / (2.0f * PI.toFloat() * 60.0f)
@@ -222,8 +189,7 @@ object AudioEngine {
         for (i in 0 until finalSize) {
             val vocalSample = if (i < effected.size) effected[i].toInt() else 0
             val beatSample = if (i < beat.size) beat[i].toInt() else 0
-            // Vocal-forward mix: voice is the star
-            val mixed = ((vocalSample * 0.85f) + (beatSample * 0.40f)).toInt()
+            val mixed = ((vocalSample * 0.85f) + (beatSample * 0.45f)).toInt()
             finalMix[i] = mixed.coerceIn(-32768, 32767).toShort()
         }
         return finalMix
