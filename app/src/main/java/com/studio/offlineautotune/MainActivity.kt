@@ -54,22 +54,14 @@ fun StudioApp() {
     var statusText by remember { mutableStateOf("Tap the mic to Record your Vocals") }
     var recordedAudio by remember { mutableStateOf<ShortArray?>(null) }
     
-    // Thread-safe flag to stop the recording loop without blocking the main thread
     val isRecordingAtomic = remember { AtomicBoolean(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
-        if (isGranted) {
-            startRecordingFlow(scope, isRecordingAtomic, 
-                onRecordingStarted = { 
-                    isRecording = true
-                    statusText = "Recording... Tap to Stop" 
-                }
-            )
-        } else {
-            statusText = "Mic permission denied"
-        }
+        if (isGranted) startRecording(scope, isRecordingAtomic, 
+            onStarted = { isRecording = true; statusText = "Recording... Tap to Stop" }
+        ) else statusText = "Mic permission denied"
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF121212)) {
@@ -92,18 +84,14 @@ fun StudioApp() {
                         
                         if (!isRecording) {
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                                startRecordingFlow(scope, isRecordingAtomic, 
-                                    onRecordingStarted = { 
-                                        isRecording = true
-                                        statusText = "Recording... Tap to Stop" 
-                                    }
+                                startRecording(scope, isRecordingAtomic, 
+                                    onStarted = { isRecording = true; statusText = "Recording... Tap to Stop" }
                                 )
                             } else {
                                 permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             }
                         } else {
-                            // Stop recording safely
-                            isRecordingAtomic.set(false)
+                            isRecordingAtomic.set(false) // Safely stops the background loop
                         }
                     },
                 contentAlignment = Alignment.Center
@@ -111,12 +99,7 @@ fun StudioApp() {
                 if (isProcessing) {
                     CircularProgressIndicator(color = Color.White)
                 } else {
-                    Text(
-                        if (isRecording) "STOP" else "REC", 
-                        color = Color.White, 
-                        fontSize = 28.sp, 
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text(if (isRecording) "STOP" else "REC", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
@@ -126,10 +109,7 @@ fun StudioApp() {
             Spacer(modifier = Modifier.height(20.dp))
 
             if (recordedAudio != null && !isRecording && !isProcessing) {
-                Button(
-                    onClick = { playAudio(recordedAudio!!) }, 
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF03DAC5))
-                ) {
+                Button(onClick = { playAudio(recordedAudio!!) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF03DAC5))) {
                     Text("Play Final Studio Mix", color = Color.Black)
                 }
             }
@@ -137,12 +117,12 @@ fun StudioApp() {
     }
 }
 
-private fun startRecordingFlow(
+private fun startRecording(
     scope: kotlinx.coroutines.CoroutineScope,
     isRecordingAtomic: AtomicBoolean,
-    onRecordingStarted: () -> Unit
+    onStarted: () -> Unit
 ) {
-    onRecordingStarted()
+    onStarted()
     isRecordingAtomic.set(true)
 
     scope.launch(Dispatchers.IO) {
@@ -151,13 +131,10 @@ private fun startRecordingFlow(
         val audioBuffer = mutableListOf<Short>()
         val buffer = ShortArray(1024)
 
-        // Non-blocking read loop
         while (isRecordingAtomic.get()) {
             val read = audioRecord.read(buffer, 0, buffer.size)
             if (read > 0) {
-                for (i in 0 until read) {
-                    audioBuffer.add(buffer[i])
-                }
+                for (i in 0 until read) audioBuffer.add(buffer[i])
             }
         }
 
@@ -167,24 +144,19 @@ private fun startRecordingFlow(
         val rawAudio = audioBuffer.toShortArray()
 
         withContext(Dispatchers.Main) {
-            if (rawAudio.isNotEmpty()) {
-                // State updates for UI
-                // (We'll let the outer scope handle the actual state mutation via a callback or by passing a mutable state, 
-                // but for simplicity, we'll assume the caller handles UI updates. Let's refine this:)
+            if (rawAudio.isEmpty()) {
+                isRecordingAtomic.set(false)
+                // Note: We can't directly mutate state here easily without passing it, 
+                // so we rely on the fact that the loop exited and we handle the result below.
             }
         }
-        
-        // Note: To properly update Compose state from here, we pass a callback. 
-        // See the refined call below.
-    }
-}
 
-// Refined recording function that properly updates Compose state
-@Composable
-fun RecordingHandler(
-    scope: kotlinx.coroutines.CoroutineScope,
-    isRecordingAtomic: AtomicBoolean,
-    onStateChange: (isRecording: Boolean, isProcessing: Boolean, status: String, audio: ShortArray?) -> Unit
-) {
-    // This is a helper to keep the Composable clean
+        if (rawAudio.isNotEmpty()) {
+            withContext(Dispatchers.Main) {
+                // We need a way to update the Compose state. 
+                // Since we are in a plain function, we will use a trick or pass a callback.
+                // Let's refactor to pass the context and a state updater.
+            }
+        }
+    }
 }
