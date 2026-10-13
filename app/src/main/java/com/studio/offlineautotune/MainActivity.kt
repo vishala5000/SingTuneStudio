@@ -36,11 +36,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
-                StudioApp()
-            }
-        }
+        setContent { StudioApp() }
     }
 }
 
@@ -59,9 +55,18 @@ fun StudioApp() {
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
-        if (isGranted) startRecording(scope, isRecordingAtomic, 
-            onStarted = { isRecording = true; statusText = "Recording... Tap to Stop" }
-        ) else statusText = "Mic permission denied"
+        if (isGranted) {
+            isRecording = true
+            isRecordingAtomic.set(true)
+            statusText = "Recording... Tap to Stop"
+            runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio ->
+                isProcessing = processing
+                statusText = status
+                if (audio != null) recordedAudio = audio
+            }
+        } else {
+            statusText = "Mic permission denied"
+        }
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF121212)) {
@@ -72,7 +77,6 @@ fun StudioApp() {
         ) {
             Text("SingTune Studio", fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.White)
             Text("100% Offline Auto-Tune & Beat Maker", fontSize = 14.sp, color = Color.Gray)
-            
             Spacer(modifier = Modifier.height(60.dp))
 
             Box(
@@ -81,31 +85,31 @@ fun StudioApp() {
                     .background(if (isRecording) Color.Red else Color(0xFFBB86FC), CircleShape)
                     .clickable {
                         if (isProcessing) return@clickable
-                        
                         if (!isRecording) {
                             if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                                startRecording(scope, isRecordingAtomic, 
-                                    onStarted = { isRecording = true; statusText = "Recording... Tap to Stop" }
-                                )
+                                isRecording = true
+                                isRecordingAtomic.set(true)
+                                statusText = "Recording... Tap to Stop"
+                                runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio ->
+                                    isProcessing = processing
+                                    statusText = status
+                                    if (audio != null) recordedAudio = audio
+                                }
                             } else {
                                 permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             }
                         } else {
-                            isRecordingAtomic.set(false) // Safely stops the background loop
+                            isRecordingAtomic.set(false) // Triggers loop exit
                         }
                     },
                 contentAlignment = Alignment.Center
             ) {
-                if (isProcessing) {
-                    CircularProgressIndicator(color = Color.White)
-                } else {
-                    Text(if (isRecording) "STOP" else "REC", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                }
+                if (isProcessing) CircularProgressIndicator(color = Color.White)
+                else Text(if (isRecording) "STOP" else "REC", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
             }
 
             Spacer(modifier = Modifier.height(40.dp))
             Text(statusText, color = Color.White, fontSize = 16.sp)
-
             Spacer(modifier = Modifier.height(20.dp))
 
             if (recordedAudio != null && !isRecording && !isProcessing) {
@@ -117,14 +121,12 @@ fun StudioApp() {
     }
 }
 
-private fun startRecording(
+private fun runRecordingProcess(
     scope: kotlinx.coroutines.CoroutineScope,
     isRecordingAtomic: AtomicBoolean,
-    onStarted: () -> Unit
+    context: android.content.Context,
+    onResult: (isProcessing: Boolean, status: String, audio: ShortArray?) -> Unit
 ) {
-    onStarted()
-    isRecordingAtomic.set(true)
-
     scope.launch(Dispatchers.IO) {
         val audioRecord = AudioEngine.createAudioRecord()
         audioRecord.startRecording()
@@ -133,30 +135,40 @@ private fun startRecording(
 
         while (isRecordingAtomic.get()) {
             val read = audioRecord.read(buffer, 0, buffer.size)
-            if (read > 0) {
-                for (i in 0 until read) audioBuffer.add(buffer[i])
-            }
+            if (read > 0) for (i in 0 until read) audioBuffer.add(buffer[i])
         }
 
         audioRecord.stop()
         audioRecord.release()
-
         val rawAudio = audioBuffer.toShortArray()
 
-        withContext(Dispatchers.Main) {
-            if (rawAudio.isEmpty()) {
-                isRecordingAtomic.set(false)
-                // Note: We can't directly mutate state here easily without passing it, 
-                // so we rely on the fact that the loop exited and we handle the result below.
-            }
+        if (rawAudio.isEmpty()) {
+            withContext(Dispatchers.Main) { onResult(false, "Recording was empty. Try again.", null) }
+            return@launch
         }
 
-        if (rawAudio.isNotEmpty()) {
-            withContext(Dispatchers.Main) {
-                // We need a way to update the Compose state. 
-                // Since we are in a plain function, we will use a trick or pass a callback.
-                // Let's refactor to pass the context and a state updater.
-            }
+        withContext(Dispatchers.Main) { onResult(true, "Processing your studio track...", null) }
+
+        val beat = withContext(Dispatchers.Default) { AudioEngine.generateProceduralBeat(rawAudio.size / AudioEngine.SAMPLE_RATE.toFloat()) }
+        val finalMix = withContext(Dispatchers.Default) { AudioEngine.processVocalAndMix(rawAudio, beat) }
+        
+        val fileName = "SingTune_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}"
+        FileSaver.saveAsWav(context, finalMix, fileName)
+
+        withContext(Dispatchers.Main) { 
+            onResult(false, "Saved to Music/SingTuneStudio!", finalMix)
+            Toast.makeText(context, "Song saved!", Toast.LENGTH_SHORT).show()
         }
     }
+}
+
+private fun playAudio(audio: ShortArray) {
+    val audioTrack = AudioTrack.Builder()
+        .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+        .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(AudioEngine.SAMPLE_RATE).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+        .setBufferSizeInBytes(audio.size * 2)
+        .setTransferMode(AudioTrack.MODE_STATIC)
+        .build()
+    audioTrack.write(audio, 0, audio.size)
+    audioTrack.play()
 }
