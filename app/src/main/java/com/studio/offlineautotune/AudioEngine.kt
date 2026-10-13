@@ -21,7 +21,7 @@ object AudioEngine {
         )
     }
 
-    // Robust WAV loader
+    // Robust WAV loader: handles mono/stereo, skips header properly
     private fun loadWavFromRaw(context: Context, resourceId: Int): ShortArray {
         val inputStream = context.resources.openRawResource(resourceId)
         val byteArrayOutputStream = ByteArrayOutputStream()
@@ -74,7 +74,6 @@ object AudioEngine {
         return looped
     }
 
-    // Generate beat using REAL audio loops at ORIGINAL quality
     fun generateProceduralBeat(context: Context, durationSec: Float, vocalAudio: ShortArray): ShortArray {
         val drumLoop = loadWavFromRaw(context, R.raw.drum_loop)
         val bassLoop = loadWavFromRaw(context, R.raw.bass_loop)
@@ -105,13 +104,10 @@ object AudioEngine {
         return beat
     }
 
-    // --- VOCAL CHAIN WITH GENTLE AUTO-TUNE TO MATCH LOOP KEY ---
-    
-    // Gentle pitch correction: snaps vocal to nearest note in A minor scale
+    // FIXED: Non-overlapping windows to prevent artifacts
     private fun autoTuneToAmScale(audio: ShortArray): ShortArray {
         val out = ShortArray(audio.size)
         val windowSize = 2048
-        val hopSize = 1024
         
         // A minor scale frequencies (A3 to A5 range)
         val amScale = listOf(
@@ -119,20 +115,20 @@ object AudioEngine {
             493.88f, 523.25f, 587.33f, 659.25f, 698.46f, 783.99f, 880.0f
         )
         
-        for (i in 0 until audio.size step hopSize) {
+        // Process in NON-OVERLAPPING windows (FIX: prevents artifacts)
+        var i = 0
+        while (i < audio.size) {
             val end = minOf(i + windowSize, audio.size)
             val window = audio.copyOfRange(i, end)
             
-            // Simple pitch detection for this window
             val detectedPitch = detectPitchInWindow(window)
             
             if (detectedPitch > 0) {
-                // Find nearest note in A minor scale
                 val nearestNote = amScale.minByOrNull { abs(it - detectedPitch) } ?: detectedPitch
                 val shiftFactor = nearestNote / detectedPitch
                 
-                // Apply very gentle pitch correction (only if close to scale)
-                if (abs(shiftFactor - 1.0f) < 0.1f) {
+                // Only apply gentle correction if very close to scale (within 5%)
+                if (abs(shiftFactor - 1.0f) < 0.05f) {
                     for (j in 0 until window.size) {
                         val srcIndex = j * shiftFactor
                         val indexLow = srcIndex.toInt()
@@ -165,6 +161,8 @@ object AudioEngine {
                     }
                 }
             }
+            
+            i += windowSize // Move to next non-overlapping window
         }
         return out
     }
@@ -181,7 +179,7 @@ object AudioEngine {
         
         for (i in buffer.indices) rms += buffer[i] * buffer[i]
         rms = sqrt(rms / buffer.size)
-        if (rms < 0.02f) return 0f // Too quiet
+        if (rms < 0.02f) return 0f
 
         var lastCorrelation = 1.0f
         for (offset in 50 until minOf(buffer.size / 2, 1000)) {
@@ -267,11 +265,11 @@ object AudioEngine {
     }
 
     fun processVocalAndMix(rawVocal: ShortArray, beat: ShortArray): ShortArray {
-        val tuned = autoTuneToAmScale(rawVocal)      // Gentle auto-tune to match loop key
-        val clean = removeMud(tuned)                  // Remove low-end mud
-        val clear = addClarity(clean)                 // Add presence
-        val compressed = applyCompression(clear)      // Smooth dynamics
-        val effected = applyStudioEffects(compressed) // Reverb + echo
+        val tuned = autoTuneToAmScale(rawVocal)
+        val clean = removeMud(tuned)
+        val clear = addClarity(clean)
+        val compressed = applyCompression(clear)
+        val effected = applyStudioEffects(compressed)
         
         val finalSize = maxOf(effected.size, beat.size)
         val finalMix = ShortArray(finalSize)
