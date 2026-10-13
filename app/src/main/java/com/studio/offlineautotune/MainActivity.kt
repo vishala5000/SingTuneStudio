@@ -61,16 +61,13 @@ fun StudioApp() {
             isRecording = true
             isRecordingAtomic.set(true)
             statusText = "Singing... Tap to Stop"
-            runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio, done, keyFreq ->
+            runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio, done, keyName ->
                 isProcessing = processing
                 statusText = status
                 if (audio != null) recordedAudio = audio
                 if (done) {
                     isRecording = false
-                    val noteNames = listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-                    val midiNote = (12.0 * kotlin.math.log2(keyFreq.toDouble() / 440.0) + 69.0).toInt()
-                    val noteIndex = ((midiNote % 12) + 12) % 12
-                    detectedKeyText = "Detected Key: ${noteNames[noteIndex]} Major"
+                    detectedKeyText = "Detected Key: $keyName Major"
                 }
             }
         } else {
@@ -106,16 +103,13 @@ fun StudioApp() {
                                 isRecording = true
                                 isRecordingAtomic.set(true)
                                 statusText = "Singing... Tap to Stop"
-                                runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio, done, keyFreq ->
+                                runRecordingProcess(scope, isRecordingAtomic, context) { processing, status, audio, done, keyName ->
                                     isProcessing = processing
                                     statusText = status
                                     if (audio != null) recordedAudio = audio
                                     if (done) {
                                         isRecording = false
-                                        val noteNames = listOf("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-                                        val midiNote = (12.0 * kotlin.math.log2(keyFreq.toDouble() / 440.0) + 69.0).toInt()
-                                        val noteIndex = ((midiNote % 12) + 12) % 12
-                                        detectedKeyText = "Detected Key: ${noteNames[noteIndex]} Major"
+                                        detectedKeyText = "Detected Key: $keyName Major"
                                     }
                                 }
                             } else {
@@ -171,7 +165,7 @@ private fun runRecordingProcess(
     scope: kotlinx.coroutines.CoroutineScope,
     isRecordingAtomic: AtomicBoolean,
     context: android.content.Context,
-    onResult: (isProcessing: Boolean, status: String, audio: ShortArray?, done: Boolean, keyFreq: Float) -> Unit
+    onResult: (isProcessing: Boolean, status: String, audio: ShortArray?, done: Boolean, keyName: String) -> Unit
 ) {
     scope.launch(Dispatchers.IO) {
         val audioRecord = AudioEngine.createAudioRecord()
@@ -190,19 +184,17 @@ private fun runRecordingProcess(
 
         if (rawAudio.isEmpty()) {
             withContext(Dispatchers.Main) { 
-                onResult(false, "Recording empty. Try again.", null, true, 261.63f) 
+                onResult(false, "Recording empty. Try again.", null, true, "--") 
             }
             return@launch
         }
 
         withContext(Dispatchers.Main) { 
-            onResult(true, "Applying Auto-Tune & Generating Guitar...", null, false, 261.63f) 
+            onResult(true, "Applying Auto-Tune & Generating Guitar...", null, false, "--") 
         }
 
-        // Detect key for UI display
-        val detectedKey = AudioEngine.detectRootKey(rawAudio)
+        val keyName = AudioEngine.getKeyDisplay(rawAudio)
 
-        // Process everything
         val finalMix = withContext(Dispatchers.Default) { 
             AudioEngine.processAndMix(rawAudio) 
         }
@@ -211,7 +203,7 @@ private fun runRecordingProcess(
         FileSaver.saveAsWav(context, finalMix, fileName)
 
         withContext(Dispatchers.Main) { 
-            onResult(false, "Saved to Music Folder!", finalMix, true, detectedKey)
+            onResult(false, "Saved to Music Folder!", finalMix, true, keyName)
             Toast.makeText(context, "Master saved!", Toast.LENGTH_SHORT).show()
         }
     }
