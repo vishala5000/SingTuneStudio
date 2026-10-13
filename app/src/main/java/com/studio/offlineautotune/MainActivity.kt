@@ -99,7 +99,7 @@ fun StudioApp() {
                                 permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             }
                         } else {
-                            isRecordingAtomic.set(false) // Triggers loop exit
+                            isRecordingAtomic.set(false)
                         }
                     },
                 contentAlignment = Alignment.Center
@@ -147,11 +147,11 @@ private fun runRecordingProcess(
             return@launch
         }
 
-        withContext(Dispatchers.Main) { onResult(true, "Analyzing key & Processing track...", null) }
+        withContext(Dispatchers.Main) { onResult(true, "Processing your studio track...", null) }
 
-        // UPGRADED: Now passes rawAudio so the beat generator can detect the singing key!
+        // UPDATED: Now passes context to load real audio files
         val beat = withContext(Dispatchers.Default) { 
-            AudioEngine.generateProceduralBeat(rawAudio.size / AudioEngine.SAMPLE_RATE.toFloat(), rawAudio) 
+            AudioEngine.generateProceduralBeat(context, rawAudio.size / AudioEngine.SAMPLE_RATE.toFloat(), rawAudio) 
         }
         
         val finalMix = withContext(Dispatchers.Default) { 
